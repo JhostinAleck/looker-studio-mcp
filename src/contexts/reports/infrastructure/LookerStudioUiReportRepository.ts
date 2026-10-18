@@ -76,10 +76,16 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   private edit<T>(reportId: string, work: (editor: LookerStudioEditor) => Promise<T>): Promise<T> {
     return this.opts.browser.withPage(async (page) => {
       const editor = await LookerStudioEditor.openReport(page, reportId, this.opts.stepTimeoutMs);
-      const result = await work(editor);
-      // Lets autosave finish before the tab closes.
-      await editor.settle(1500);
-      return result;
+      // Pointer work only reaches what is on screen: make the whole page fit.
+      const restore = await this.fitWindowTo(page, page.locator(SEL.canvas).first());
+      try {
+        const result = await work(editor);
+        // Lets autosave finish before the tab closes.
+        await editor.settle(1500);
+        return result;
+      } finally {
+        await restore();
+      }
     });
   }
 

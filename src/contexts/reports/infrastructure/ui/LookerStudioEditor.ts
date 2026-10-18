@@ -382,14 +382,8 @@ export class LookerStudioEditor {
         await manual.waitFor({ timeout: this.timeoutMs });
         await manual.fill(source.projectId);
         await manual.press('Enter');
-        await this.page
-          .getByText(source.datasetId, { exact: true })
-          .first()
-          .click({ timeout: this.timeoutMs });
-        await this.page
-          .getByText(source.tableId, { exact: true })
-          .first()
-          .click({ timeout: this.timeoutMs });
+        await this.clickVisibleText(source.datasetId);
+        await this.clickVisibleText(source.tableId);
         await this.page.getByRole('button', { name: 'Add', exact: true }).click();
         // Existing reports ask to confirm; new ones go straight to the editor.
         const confirm = this.page.getByRole('button', { name: 'Add to report', exact: true });
@@ -403,14 +397,54 @@ export class LookerStudioEditor {
     await this.settle();
   }
 
-  // Picks the data source in the Setup panel when the report has several.
+  // Picks the data source in the Setup panel when the report has several: the
+  // selector button opens a searchable list of the report's data sources.
   async chooseDataSource(name: string): Promise<void> {
     await this.step(`choose data source ${name}`, async () => {
-      const panel = this.page.locator(SEL.propertiesPanel);
-      await panel.locator('mat-select, [role=combobox]').first().click();
-      await this.page.getByRole('option', { name, exact: true }).click();
+      await this.openTab('Setup');
+      await this.page
+        .locator(`${SEL.propertiesPanel} button.datasource-selector-button`)
+        .first()
+        .click();
+      const option = this.page
+        .locator('.cdk-overlay-container')
+        .getByText(name, { exact: true })
+        .first();
+      await option.waitFor({ timeout: this.timeoutMs }).catch(() => {
+        throw new Error(
+          `the report has no data source called "${name}"; add it with add_data_source`,
+        );
+      });
+      await option.click();
     });
-    await this.settle();
+    await this.settle(1500);
+  }
+
+  // Clicks the copy of `text` that is actually on top: the same table name can
+  // also be in the Data panel or a selector underneath the open dialog.
+  private async clickVisibleText(text: string): Promise<void> {
+    const deadline = Date.now() + this.timeoutMs;
+    while (Date.now() < deadline) {
+      const point = await this.page.evaluate((wanted) => {
+        for (const e of document.querySelectorAll<HTMLElement>('body *')) {
+          if (e.children.length > 0 || e.textContent?.trim() !== wanted) continue;
+          e.scrollIntoView({ block: 'nearest' });
+          const r = e.getBoundingClientRect();
+          if (r.width === 0) continue;
+          const x = r.x + Math.min(r.width / 2, 20);
+          const y = r.y + r.height / 2;
+          const top = document.elementFromPoint(x, y);
+          if (top && (top === e || e.contains(top) || top.contains(e))) return { x, y };
+        }
+        return null;
+      }, text);
+      if (point) {
+        await this.page.mouse.click(point.x, point.y);
+        return;
+      }
+      await sleep(300);
+    }
+    throw new Error(`"${text}" is not in the list`);
   }
 
   private async setupSlots(): Promise<SetupSlot[]> {
