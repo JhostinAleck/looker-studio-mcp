@@ -1,0 +1,78 @@
+{
+  "name": "looker-studio-mcp",
+  "version": "0.1.0",
+  "mcpName": "io.github.JhostinAleck/looker-studio",
+  "description": "MCP server for Looker Studio (Data Studio) and BigQuery: data, views, reports and charts",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "looker-studio",
+    "data-studio",
+    "bigquery",
+    "dashboard",
+    "claude"
+  ],
+  "homepage": "https://github.com/JhostinAleck/looker-studio-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JhostinAleck/looker-studio-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JhostinAleck/looker-studio-mcp/issues"
+  },
+  "author": "Jhostin Aleck",
+  "type": "module",
+  "main": "build/cli/main.js",
+  "bin": {
+    "looker-studio-mcp": "build/cli/main.js"
+  },
+  "files": [
+    "build",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc && tsc-alias",
+    "build:clean": "rm -rf build && npm run build",
+    "dev": "tsc --watch",
+    "start": "node build/cli/main.js serve",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:ci": "vitest run --coverage && npm run check:deps",
+    "lint": "eslint src tests --no-error-on-unmatched-pattern",
+    "format": "prettier --write .",
+    "typecheck": "tsc --noEmit",
+    "check:deps": "depcruise --config .dependency-cruiser.cjs src",
+    "check": "run-p lint typecheck test:run check:deps",
+    "prepublishOnly": "npm run check && npm run build:clean"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "commander": "^14.0.3",
+    "google-auth-library": "^10.5.0",
+    "yaml": "^2.8.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.6.0",
+    "@typescript-eslint/eslint-plugin": "^8.59.2",
+    "@typescript-eslint/parser": "^8.59.2",
+    "@vitest/coverage-v8": "^4.1.11",
+    "dependency-cruiser": "^17.4.0",
+    "eslint": "^10.3.0",
+    "npm-run-all2": "^8.0.4",
+    "prettier": "^3.0.0",
+    "tsc-alias": "^1.8.17",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.59.1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,63 @@
+# Build output
+build/
+dist/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Coverage
+coverage/
+.nyc_output/
+
+# VitePress
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
+# Test artifacts
+tests/fixtures/_local/
+
+# Internal planning / process docs — NEVER commit
+# These pollute the public repo; they are local-only working artifacts.
+docs/superpowers/
+docs/plans/
+docs/_internal/
+docs/_brainstorms/
+*.spec.local.md
+*.plan.local.md
+
+# Runtime secrets (belt-and-suspenders — they should never be here anyway)
+*.pem
+*.key
+secrets/
+.looker-studio-mcp/
+
+# Local AI assistant session files (track CLAUDE.md but ignore runtime files)
+.claude/*
+!.claude/CLAUDE.md
+.superpowers/
+
+# Local tooling artifacts
+.playwright-mcp/
+download.html

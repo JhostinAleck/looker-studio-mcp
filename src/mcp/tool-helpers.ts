@@ -1,0 +1,100 @@
+import { randomUUID } from 'node:crypto';
+
+import type { Field, QueryResult } from '@/contexts/bigquery/domain/BigQuery.js';
+import type { AuditLogger } from '@/shared-kernel/audit/AuditLogger.js';
+import { DomainError } from '@/shared-kernel/errors/DomainError.js';
+import type { WritesGate } from '@/shared-kernel/writes/WritesGate.js';
+
+export interface ToolResult {
+  [key: string]: unknown;
+  content: Array<
+    { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }
+  >;
+  isError?: boolean;
+}
+
+export function text(body: string): ToolResult {
+  return { content: [{ type: 'text', text: body }] };
+}
+
+export function errorMessage(err: unknown): string {
+  return err instanceof DomainError
+    ? err.userMessage
+    : err instanceof Error
+      ? err.message
+      : String(err);
+}
+
+export function errorResult(err: unknown): ToolResult {
+  return { content: [{ type: 'text', text: `Error: ${errorMessage(err)}` }], isError: true };
+}
+
+export class MissingProjectError extends DomainError {
+  readonly code = 'MISSING_PROJECT';
+  readonly userMessage =
+    'No Google Cloud project: pass project_id or set project_id in ~/.looker-studio-mcp/config.yaml.';
+}
+
+export function resolveProject(
+  defaultProject: string | undefined,
+  given: string | undefined,
+): string {
+  const project = given ?? defaultProject;
+  if (!project) throw new MissingProjectError();
+  return project;
+}
+
+export interface WriteDeps {
+  writesGate: WritesGate;
+  auditLogger: AuditLogger;
+}
+
+// Every write is audited first; in dry-run mode it only reports what it would do.
+export async function runWrite(
+  deps: WriteDeps,
+  tool: string,
+  args: Record<string, unknown>,
+  describe: string,
+  work: () => Promise<ToolResult>,
+): Promise<ToolResult> {
+  deps.auditLogger.recordWriteAttempt({ correlationId: randomUUID(), tool, args });
+  if (deps.writesGate.isDryRun) return text(`Dry run: would ${describe}. Nothing was changed.`);
+  return work();
+}
+
+function cell(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const raw = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return raw.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+}
+
+export function rowsToMarkdown(result: QueryResult): string {
+  const columns = result.schema.map((f) => f.name);
+  if (result.rows.length === 0) return '_No rows._';
+  const header = `| ${columns.join(' | ')} |\n|${columns.map(() => '---').join('|')}|`;
+  const body = result.rows
+    .map((row) => `| ${columns.map((c) => cell(row[c])).join(' | ')} |`)
+    .join('\n');
+  return `${header}\n${body}`;
+}
+
+export function fieldsToMarkdown(fields: Field[], indent = ''): string {
+  return fields
+    .map((f) => {
+      const line = `${indent}- \`${f.name}\` ${f.type}${f.mode === 'NULLABLE' ? '' : ` ${f.mode}`}${f.description ? ` — ${f.description}` : ''}`;
+      return f.fields.length > 0 ? `${line}\n${fieldsToMarkdown(f.fields, `${indent}  `)}` : line;
+    })
+    .join('\n');
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
