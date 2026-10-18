@@ -145,7 +145,7 @@ See [docs/design-guide.md](docs/design-guide.md) for the canvas grid, the card p
 
 ## Architecture
 
-DDD with bounded contexts, mirroring [brightspace-mcp](https://github.com/JhostinAleck/brightspace-mcp):
+DDD with bounded contexts:
 
 ```
 src/contexts/authentication   Google token provider, browser session (Playwright profile)

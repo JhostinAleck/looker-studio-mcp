@@ -14,9 +14,9 @@ describe('expandPath', () => {
   });
 
   it('expands %VAR% tokens from process.env', () => {
-    process.env['BRIGHTSPACE_TEST_VAR'] = '/tmp/test';
-    expect(expandPath('%BRIGHTSPACE_TEST_VAR%/file.txt')).toBe('/tmp/test/file.txt');
-    delete process.env['BRIGHTSPACE_TEST_VAR'];
+    process.env['LOOKER_TEST_VAR'] = '/tmp/test';
+    expect(expandPath('%LOOKER_TEST_VAR%/file.txt')).toBe('/tmp/test/file.txt');
+    delete process.env['LOOKER_TEST_VAR'];
   });
 
   it('leaves unknown %VAR% tokens as literal text', () => {

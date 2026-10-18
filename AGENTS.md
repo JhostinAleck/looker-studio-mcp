@@ -4,7 +4,7 @@
 
 ## What this is
 
-MCP server that lets AI assistants build Looker Studio dashboards on BigQuery. TypeScript, DDD with bounded contexts, opt-in writes. Same structure as `brightspace-mcp`.
+MCP server that lets AI assistants build Looker Studio dashboards on BigQuery. TypeScript, DDD with bounded contexts, opt-in writes.
 
 ```
 src/
