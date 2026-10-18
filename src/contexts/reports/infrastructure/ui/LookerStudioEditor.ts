@@ -440,7 +440,13 @@ export class LookerStudioEditor {
         await manual.waitFor({ timeout: this.timeoutMs });
         await manual.fill(source.projectId);
         await manual.press('Enter');
-        await this.clickVisibleText(source.datasetId);
+        // The dataset list sometimes never loads after the first Enter: ask again.
+        await this.clickVisibleText(source.datasetId, this.timeoutMs / 2).catch(async () => {
+          await manual.fill('');
+          await manual.fill(source.projectId);
+          await manual.press('Enter');
+          await this.clickVisibleText(source.datasetId);
+        });
         await this.clickVisibleText(source.tableId);
         await this.page.getByRole('button', { name: 'Add', exact: true }).click();
         // Existing reports ask to confirm; new ones go straight to the editor.
@@ -480,8 +486,8 @@ export class LookerStudioEditor {
 
   // Clicks the copy of `text` that is actually on top: the same table name can
   // also be in the Data panel or a selector underneath the open dialog.
-  private async clickVisibleText(text: string): Promise<void> {
-    const deadline = Date.now() + this.timeoutMs;
+  private async clickVisibleText(text: string, timeoutMs = this.timeoutMs): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const point = await this.page.evaluate((wanted) => {
         for (const e of document.querySelectorAll<HTMLElement>('body *')) {

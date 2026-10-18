@@ -255,6 +255,17 @@ export async function addPage(
   return repo.addPage(parseReportId(report), name.trim());
 }
 
+export async function renamePage(
+  repo: ReportRepository,
+  report: string,
+  page: number,
+  name: string,
+): Promise<void> {
+  if (!name.trim()) throw new InvalidChartError('The page name cannot be empty.');
+  if (!Number.isInteger(page) || page < 1) throw new InvalidChartError('page is 1-based.');
+  return repo.renamePage(parseReportId(report), page, name.trim());
+}
+
 export async function listPages(repo: ReportRepository, report: string): Promise<ReportPage[]> {
   return repo.listPages(parseReportId(report));
 }

@@ -116,7 +116,7 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `delete_component` | Remove a component |
 | `set_theme` | Built-in theme, custom theme settings, page size, Layout settings (tab navigation, header) |
 | `share_report` | Invite several people at once as viewers or editors; existing access is changed in place |
-| `add_page`, `rename_report`, `delete_report` | Report management |
+| `add_page`, `rename_page`, `rename_report`, `delete_report` | Report management |
 
 Settings are addressed by the **label the properties panel shows** (`"Bar color"`, `"Show data labels"`, `"Border radius"`…). `describe_component` lists them; settings that do not exist come back as warnings instead of failing silently.
 

@@ -28,6 +28,7 @@ import { handleListReportPages } from './tools/list-report-pages.tool.js';
 import { handleListReports } from './tools/list-reports.tool.js';
 import { handleListTables } from './tools/list-tables.tool.js';
 import { handleRefreshDataSource } from './tools/refresh-data-source.tool.js';
+import { handleRenamePage } from './tools/rename-page.tool.js';
 import { handleRenameReport } from './tools/rename-report.tool.js';
 import { handleRunQuery } from './tools/run-query.tool.js';
 import { handleScreenshotReport } from './tools/screenshot-report.tool.js';
@@ -271,6 +272,14 @@ const TOOLS: ToolDef[] = [
     schema: schemas.addPageSchema,
     write: true,
     run: handleAddPage,
+  },
+  {
+    name: 'rename_page',
+    title: 'Rename a page',
+    description: 'Rename a page of a report; page names are the labels of tab navigation.',
+    schema: schemas.renamePageSchema,
+    write: true,
+    run: handleRenamePage,
   },
   {
     name: 'rename_report',

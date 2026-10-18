@@ -20,6 +20,7 @@ import {
   type Aggregation,
   type BigQuerySource,
   type ChartSpec,
+  type ChartType,
   type ComponentDetails,
   type ComponentInfo,
   type ControlSpec,
@@ -70,6 +71,8 @@ const ORDER_LABEL: Record<OrderMove, string> = {
   forward: 'Bring forward',
   backward: 'Send backward',
 };
+
+const PIVOTS: ChartType[] = ['pivot_table', 'pivot_bars', 'pivot_heatmap'];
 
 const DEFAULT_SIZE: Record<string, { width: number; height: number }> = {
   scorecard: { width: 220, height: 120 },
@@ -313,6 +316,17 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         'the metrics',
       );
     }
+    // Extra slots go in while fields still carry their own names: chips are
+    // matched by display name, and a relabel first lost a pivot's column field.
+    // A pivot sorts its rows by an unrelated field until told otherwise, which
+    // the editor reports as "Invalid configuration".
+    const fields: Record<string, string[]> = {
+      ...(PIVOTS.includes(chart.type) && chart.dimensions[0]
+        ? { 'Row #1': [chart.dimensions[0]] }
+        : {}),
+      ...chart.fields,
+    };
+    await this.applyFields(editor, fields);
     for (const [i, metric] of chart.metrics.entries()) {
       if (!metric.aggregation && metric.label === undefined) continue;
       await editor.editMetric(i, {
@@ -337,7 +351,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       );
     }
 
-    warnings.push(...(await this.applyData(editor, chart)));
+    warnings.push(...(await this.applyData(editor, { ...chart, fields: {} })));
 
     const style: StyleSettings = {
       ...(chart.title ? { 'Show title': true } : {}),
@@ -352,11 +366,18 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   }
 
   // Setup slots, filters, dates, series and value colors of a chart or control.
+  private async applyFields(
+    editor: LookerStudioEditor,
+    fields: Record<string, string[]>,
+  ): Promise<void> {
+    for (const [section, names] of Object.entries(fields)) {
+      await editor.setSectionFields(sectionNamed(section), names, `the "${section}" slot`);
+    }
+  }
+
   private async applyData(editor: LookerStudioEditor, data: DataSettings): Promise<string[]> {
     const warnings: string[] = [];
-    for (const [section, fields] of Object.entries(data.fields ?? {})) {
-      await editor.setSectionFields(sectionNamed(section), fields, `the "${section}" slot`);
-    }
+    await this.applyFields(editor, data.fields ?? {});
     for (const filter of data.filters ?? []) {
       const created = await editor.addFilter(this.filterClause(filter));
       if (!created && filter.field)
@@ -710,18 +731,12 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       await this.goToPage(editor, page);
       await editor.select(index);
       const warnings: string[] = [];
-      if (change.reportLevel !== undefined) {
-        await editor.clickMenu('Arrange', [
-          change.reportLevel ? 'Make report-level' : 'Make page-level',
-        ]);
-      }
-      if (change.order) {
-        const before = await editor.layouts();
-        await editor.clickMenu('Arrange', ['Order', ORDER_LABEL[change.order]]);
-        // Restacking reorders the components: find this one again by its box.
-        const box = before[index]!;
-        const after = await editor.layouts();
-        index = after.findIndex(
+      // Both restack the components (a report-level one goes to the top of
+      // the stack): find this one again by its box afterwards.
+      const restack = async (menu: string[]) => {
+        const box = (await editor.layouts())[index]!;
+        await editor.clickMenu('Arrange', menu);
+        index = (await editor.layouts()).findIndex(
           (l) => l.x === box.x && l.y === box.y && l.width === box.width && l.height === box.height,
         );
         if (index < 0)
@@ -729,7 +744,11 @@ export class LookerStudioUiReportRepository implements ReportRepository {
             'the component moved while restacking it; list the components again.',
           );
         await editor.select(index);
+      };
+      if (change.reportLevel !== undefined) {
+        await restack([change.reportLevel ? 'Make report-level' : 'Make page-level']);
       }
+      if (change.order) await restack(['Order', ORDER_LABEL[change.order]]);
       for (const [from, to] of Object.entries(change.labels ?? {})) {
         await editor.relabelField(from, to);
       }
@@ -849,6 +868,13 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     });
   }
 
+  async renamePage(reportId: string, page: number, name: string): Promise<void> {
+    await this.edit(reportId, async (editor) => {
+      await this.goToPage(editor, page);
+      await this.renameCurrentPage(editor, name);
+    });
+  }
+
   // The page being edited, from the toolbar's "Page 2 of 3".
   private async currentPageNumber(editor: LookerStudioEditor): Promise<number> {
     const label = await editor.page
@@ -874,7 +900,9 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     const current = await this.currentPageNumber(editor);
     await editor.step(`name page ${current} "${name}"`, async () => {
       if (!(await this.openPagesPanel(editor)))
-        throw new Error('the Manage pages panel did not open');
+        throw new Error(
+          'Page › Manage pages is disabled while the report has one page; add the second page first',
+        );
       await editor.page
         .locator(SEL.pageChip)
         .nth(current - 1)

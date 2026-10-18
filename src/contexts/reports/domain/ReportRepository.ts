@@ -139,6 +139,7 @@ export interface ReportRepository {
   deleteComponent(reportId: string, index: number, page?: number): Promise<void>;
   setTheme(reportId: string, theme: ThemeSpec): Promise<void>;
   addPage(reportId: string, name: string): Promise<ReportPage>;
+  renamePage(reportId: string, page: number, name: string): Promise<void>;
   listPages(reportId: string): Promise<ReportPage[]>;
   renameReport(reportId: string, name: string): Promise<void>;
   // One invitation for every address; `notify` sends Google's sharing email.

@@ -42,6 +42,7 @@ function fakeRepo(): ReportRepository {
     deleteComponent: vi.fn(async () => undefined),
     setTheme: vi.fn(async () => undefined),
     addPage: vi.fn(),
+    renamePage: vi.fn(async () => undefined),
     listPages: vi.fn(),
     renameReport: vi.fn(),
     shareReport: vi.fn(async () => undefined),

@@ -5,6 +5,10 @@
 - `add_chart` covers all 48 chart presets of Looker Studio (pivot and table heatmaps, funnels, waterfalls, sankeys, bullets, histograms, timelines, maps…).
 - Charts, controls and `update_component` take `fields` (any Setup slot by heading: column dimension, sparkline, weight metric…), `filters` (new or existing), `date_range` presets, `comparison` periods, combo `series` (bars/line, left/right axis, color) and `value_colors`.
 - New tools: `add_control` (11 filter controls), `add_image` (local file or URL), `add_calculated_field`.
+- Pivot tables sort rows by their first dimension and get extra Setup slots before metrics are renamed (a pivot built with a relabeled metric lost its column field and showed "Invalid configuration").
+- `update_component` finds the component again after `report_level`, which moves it to the top of the stack.
+- Connecting a BigQuery table asks for the dataset list again when it does not load.
+- `rename_page` names existing pages (the labels of tab navigation).
 - `set_theme` takes `layout` settings, e.g. tab navigation between pages.
 - `refresh_data_source` and `add_calculated_field` share the data source editor flow.
 - `share_report` takes a list of emails, invites them one by one in a visible window (Google refuses headless invitations) and changes the role of people who already have access.

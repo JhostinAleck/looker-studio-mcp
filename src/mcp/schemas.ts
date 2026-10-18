@@ -340,7 +340,12 @@ export const updateComponentSchema = z.object({
     .enum(ORDER_MOVES)
     .optional()
     .describe('Restack it: front, back, forward, backward. Changes its index.'),
-  report_level: z.boolean().optional().describe('true shows it on every page (headers, logos)'),
+  report_level: z
+    .boolean()
+    .optional()
+    .describe(
+      'true shows it on every page (headers, logos). It goes to the top of the stack: make a background band report-level first, or send it back afterwards.',
+    ),
   page,
   ...dataShape,
 });
@@ -375,6 +380,12 @@ export const setThemeSchema = z.object({
 });
 
 export const addPageSchema = z.object({ report_id: reportId, name: z.string().min(1) });
+
+export const renamePageSchema = z.object({
+  report_id: reportId,
+  page: z.number().int().positive().describe('1-based page'),
+  name: z.string().min(1),
+});
 
 export const listReportPagesSchema = z.object({ report_id: reportId });
 

@@ -58,4 +58,5 @@ npm test             # vitest watch
 - Filters: Setup › Add filter lists the report's filters by name, then "Create a filter": name, Include/Exclude, field picker, condition `mat-select`, value chip inputs, Save.
 - Images and value-color dialogs ignore `fill()` on some inputs; type with the keyboard. A clicked image lands at 0×0: drag its box out.
 - Some settings (Layout › Navigation type) put the label in its own cell; `findField` falls back to the next cell with a control.
+- Making a component report-level puts it on top of every other component: a header band made report-level last covers its logo and title.
 - Sharing: Google refuses invitations from a headless browser and from a Send with several chips. One address per Send, in a visible window (`withPage(work, { visible: true })`). Changing an existing person's role closes the dialog.
