@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `share_report` takes a list of emails, invites them one by one in a visible window (Google refuses headless invitations) and changes the role of people who already have access.
+- Text boxes move with Shift+Arrow when a drag does not move them.
+- Editor step errors name the element they were waiting for.
+
 ## 0.1.0 — 2026-10-17
 
 First version.

@@ -109,7 +109,13 @@ export interface ReportRepository {
   addPage(reportId: string, name: string): Promise<ReportPage>;
   listPages(reportId: string): Promise<ReportPage[]>;
   renameReport(reportId: string, name: string): Promise<void>;
-  shareReport(reportId: string, email: string, role: 'viewer' | 'editor'): Promise<void>;
+  // One invitation for every address; `notify` sends Google's sharing email.
+  shareReport(
+    reportId: string,
+    emails: string[],
+    role: 'viewer' | 'editor',
+    notify: boolean,
+  ): Promise<void>;
   // PNG of the report in view mode; returns the saved file path.
   screenshot(reportId: string, page?: number): Promise<string>;
   deleteReport(reportId: string): Promise<void>;

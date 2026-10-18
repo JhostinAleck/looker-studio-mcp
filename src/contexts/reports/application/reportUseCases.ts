@@ -210,10 +210,15 @@ export async function renameReport(
 export async function shareReport(
   repo: ReportRepository,
   report: string,
-  email: string,
+  emails: string[],
   role: 'viewer' | 'editor',
+  notify = true,
 ): Promise<void> {
-  return repo.shareReport(parseReportId(report), email.trim().toLowerCase(), role);
+  const unique = [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
+  if (unique.length === 0) throw new InvalidChartError('Pass at least one email address.');
+  const bad = unique.filter((e) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+  if (bad.length) throw new InvalidChartError(`Not email addresses: ${bad.join(', ')}.`);
+  return repo.shareReport(parseReportId(report), unique, role, notify);
 }
 
 export async function screenshotReport(

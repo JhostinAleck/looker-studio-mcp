@@ -218,8 +218,12 @@ export const renameReportSchema = z.object({ report_id: reportId, name: z.string
 
 export const shareReportSchema = z.object({
   report_id: reportId,
-  email: z.email(),
+  emails: z
+    .array(z.email())
+    .min(1)
+    .describe('Google accounts to invite (Gmail or Google Workspace)'),
   role: z.enum(['viewer', 'editor']).default('viewer'),
+  notify: z.boolean().default(true).describe("Send Google's sharing email to each person"),
 });
 
 export const screenshotReportSchema = z.object({ report_id: reportId, page });

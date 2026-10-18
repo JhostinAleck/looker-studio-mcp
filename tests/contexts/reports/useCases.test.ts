@@ -70,8 +70,22 @@ describe('report use cases', () => {
 
   it('normalizes the email when sharing', async () => {
     const repo = fakeRepo();
-    await shareReport(repo, ID, ' Ana@Example.com ', 'viewer');
-    expect(repo.shareReport).toHaveBeenCalledWith(ID, 'ana@example.com', 'viewer');
+    await shareReport(
+      repo,
+      ID,
+      [' Ana@Example.com ', 'ana@example.com', 'bo@example.com'],
+      'viewer',
+    );
+    expect(repo.shareReport).toHaveBeenCalledWith(
+      ID,
+      ['ana@example.com', 'bo@example.com'],
+      'viewer',
+      true,
+    );
+    await expect(shareReport(repo, ID, ['not-an-email'], 'editor')).rejects.toThrow(
+      InvalidChartError,
+    );
+    await expect(shareReport(repo, ID, [], 'editor')).rejects.toThrow(InvalidChartError);
   });
 
   it('deletes only when the name matches', async () => {

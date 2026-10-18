@@ -73,7 +73,11 @@ const DEFAULT_SIZE: Record<string, { width: number; height: number }> = {
 export class LookerStudioUiReportRepository implements ReportRepository {
   constructor(private readonly opts: LookerStudioUiOptions) {}
 
-  private edit<T>(reportId: string, work: (editor: LookerStudioEditor) => Promise<T>): Promise<T> {
+  private edit<T>(
+    reportId: string,
+    work: (editor: LookerStudioEditor) => Promise<T>,
+    opts: { visible?: boolean } = {},
+  ): Promise<T> {
     return this.opts.browser.withPage(async (page) => {
       const editor = await LookerStudioEditor.openReport(page, reportId, this.opts.stepTimeoutMs);
       // Pointer work only reaches what is on screen: make the whole page fit.
@@ -86,7 +90,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       } finally {
         await restore();
       }
-    });
+    }, opts);
   }
 
   async listReports(): Promise<ReportSummary[]> {
@@ -693,32 +697,103 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     await this.edit(reportId, (editor) => editor.rename(name));
   }
 
-  async shareReport(reportId: string, email: string, role: 'viewer' | 'editor'): Promise<void> {
-    await this.edit(reportId, async (editor) => {
-      await editor.step(`share with ${email}`, async () => {
-        await editor.page.getByRole('button', { name: /lets users share a report/ }).click();
-        const dialog = editor.page.locator('mat-dialog-container');
-        const input = dialog.locator('input').first();
-        await input.waitFor({ timeout: this.opts.stepTimeoutMs });
-        await input.fill(email);
-        await editor.page.waitForTimeout(800);
-        await input.press('Enter');
-        if (role === 'editor') {
-          await dialog.getByRole('button', { name: 'Viewer', exact: true }).click();
-          await editor.page
-            .getByRole('menuitem', { name: 'Editor' })
-            .or(editor.page.getByRole('option', { name: 'Editor' }))
+  // Share opens Google's sharing dialog. Invitations go one address per Send:
+  // several chips in one Send fail with "An unknown error occurred". People who
+  // already have access get their role changed from their row instead, which
+  // closes the dialog. Google refuses invitations from a headless browser, so
+  // this runs in a visible window.
+  async shareReport(
+    reportId: string,
+    emails: string[],
+    role: 'viewer' | 'editor',
+    notify: boolean,
+  ): Promise<void> {
+    await this.edit(
+      reportId,
+      async (editor) => {
+        const page = editor.page;
+        const dialog = page.locator('mat-dialog-container');
+        const wanted = role === 'editor' ? 'Editor' : 'Viewer';
+        const pickRole = async () =>
+          page
+            .locator('.cdk-overlay-container [role=menuitem]')
+            .filter({ hasText: new RegExp(`^\\s*${wanted}\\s*$`) })
             .first()
             .click();
-        }
-        await dialog.getByRole('button', { name: 'Send', exact: true }).click();
-        await dialog
-          .waitFor({ state: 'hidden', timeout: this.opts.stepTimeoutMs })
-          .catch(async () => {
-            await dialog.getByRole('button', { name: 'Done', exact: true }).click();
+        const accessOf = (email: string) =>
+          dialog.evaluate((d, address) => {
+            const leaf = [...d.querySelectorAll('*')].find(
+              (e) => e.children.length === 0 && e.textContent?.trim() === address,
+            );
+            const row = leaf?.closest('.binding');
+            const button = row?.querySelector<HTMLElement>('button');
+            if (!button) return null;
+            const r = button.getBoundingClientRect();
+            return { role: button.innerText.trim(), x: r.x + r.width / 2, y: r.y + r.height / 2 };
+          }, email);
+
+        const input = dialog.locator('input.add-people-input');
+        const openDialog = async () => {
+          if (await input.isVisible().catch(() => false)) return;
+          // After a Send the dialog can stay open on a view without the input.
+          if (await dialog.isVisible().catch(() => false)) {
+            const done = dialog.getByRole('button', { name: /^(Done|Close)$/ }).first();
+            await done.click({ timeout: 3_000 }).catch(() => page.keyboard.press('Escape'));
+            await dialog.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => undefined);
+          }
+          await page.getByRole('button', { name: /lets users share a report/ }).click();
+          await input.waitFor({ timeout: this.opts.stepTimeoutMs });
+        };
+
+        for (const email of emails) {
+          await editor.step(`share with ${email} as ${role}`, async () => {
+            await openDialog();
+            const existing = await accessOf(email);
+            if (existing) {
+              if (existing.role === wanted) return;
+              await page.mouse.click(existing.x, existing.y);
+              await pickRole();
+              const save = dialog.getByRole('button', { name: 'Save', exact: true });
+              if (await save.isVisible({ timeout: 2_000 }).catch(() => false)) await save.click();
+            } else {
+              await input.click();
+              await page.keyboard.type(email, { delay: 15 });
+              await page.waitForTimeout(600);
+              await page.keyboard.press('Enter');
+              const send = dialog.getByRole('button', { name: 'Send', exact: true });
+              await send.waitFor({ timeout: this.opts.stepTimeoutMs });
+              if (wanted !== 'Viewer') {
+                await dialog.getByText('Viewer', { exact: true }).first().click();
+                await pickRole();
+              }
+              const checkbox = dialog.locator('input[type=checkbox]').first();
+              if ((await checkbox.count()) && (await checkbox.isChecked()) !== notify) {
+                await checkbox.click({ force: true });
+              }
+              await send.click();
+            }
+            // Back on the list once Google accepts it; an error stays in the form.
+            const deadline = Date.now() + this.opts.stepTimeoutMs;
+            for (;;) {
+              await page.waitForTimeout(500);
+              await openDialog();
+              const refusal = (await dialog.innerText()).match(
+                /[^\n]*(unknown error|try again later)[^\n]*/i,
+              );
+              if (refusal) throw new Error(`Google refused the invitation: ${refusal[0].trim()}`);
+              if ((await accessOf(email))?.role === wanted) break;
+              if (Date.now() > deadline)
+                throw new Error(`${email} is not listed as ${wanted} after sending`);
+            }
           });
-      });
-    });
+        }
+        await dialog
+          .getByRole('button', { name: 'Done', exact: true })
+          .click()
+          .catch(() => page.keyboard.press('Escape'));
+      },
+      { visible: true },
+    );
   }
 
   private async fitWindowTo(tab: Page, canvas: Locator): Promise<() => Promise<void>> {

@@ -53,3 +53,5 @@ npm test             # vitest watch
 - Long menus (Insert) overflow the window: scroll items into view; submenus open on hover, search the right panel depth (a parent can share an icon with a child, e.g. Shapes/Rectangle).
 - New components land with their top-left at the click and a default size up to 400×300; place them where the resize handle stays on screen, resize, then move.
 - The viewer clips pages taller than the window: `screenshot` grows the window through CDP first.
+- Text boxes ignore drags; move them with Shift+Arrow (1 px per press). A click on a selected text box enters text editing, so deselect first.
+- Sharing: Google refuses invitations from a headless browser and from a Send with several chips. One address per Send, in a visible window (`withPage(work, { visible: true })`). Changing an existing person's role closes the dialog.

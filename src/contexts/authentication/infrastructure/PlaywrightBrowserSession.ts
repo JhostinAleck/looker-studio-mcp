@@ -37,17 +37,25 @@ function loadPlaywright(): typeof Playwright {
 // `looker-studio-mcp login` keeps working across server restarts.
 export class PlaywrightBrowserSession implements BrowserSession<Page> {
   private context: Promise<BrowserContext> | null = null;
+  private headless: boolean;
 
-  constructor(private readonly opts: PlaywrightBrowserSessionOptions) {}
+  constructor(private readonly opts: PlaywrightBrowserSessionOptions) {
+    this.headless = opts.headless;
+  }
 
-  private open(): Promise<BrowserContext> {
+  // The profile allows one browser at a time: switching between headless and
+  // visible relaunches it.
+  private async open(visible = false): Promise<BrowserContext> {
+    const headless = visible ? false : this.opts.headless;
+    if (this.context && headless !== this.headless) await this.close();
+    this.headless = headless;
     if (!this.context) {
       mkdirSync(this.opts.profileDir, { recursive: true });
       const { chromium } = loadPlaywright();
       this.context = chromium
         .launchPersistentContext(this.opts.profileDir, {
           ...(this.opts.channel === 'chromium' ? {} : { channel: this.opts.channel }),
-          headless: this.opts.headless,
+          headless,
           // Chrome rejects Playwright's viewport emulation on a real profile; size the window instead.
           viewport: null,
           // --enable-automation makes Google treat the window as a bot. The mock
@@ -72,8 +80,11 @@ export class PlaywrightBrowserSession implements BrowserSession<Page> {
     return this.context;
   }
 
-  async withPage<T>(work: (page: Page) => Promise<T>): Promise<T> {
-    const context = await this.open();
+  async withPage<T>(
+    work: (page: Page) => Promise<T>,
+    opts: { visible?: boolean } = {},
+  ): Promise<T> {
+    const context = await this.open(opts.visible);
     const page = await context.newPage();
     try {
       return await work(page);

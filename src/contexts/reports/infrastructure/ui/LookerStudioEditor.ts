@@ -105,7 +105,14 @@ export class LookerStudioEditor {
     try {
       return await work();
     } catch (err) {
-      const reason = err instanceof Error ? err.message.split('\n')[0] : String(err);
+      // Playwright puts the locator it was waiting for on a later line; keep it,
+      // it is what tells which element of the editor changed.
+      const lines = err instanceof Error ? err.message.split('\n') : [String(err)];
+      const waiting = lines
+        .find((l) => /waiting for /.test(l))
+        ?.replace(/^.*waiting for /, '')
+        .trim();
+      const reason = waiting ? `${lines[0]} (waiting for ${waiting})` : lines[0];
       throw new EditorStepError(`Looker Studio editor could not ${what}: ${reason}`);
     }
   }
@@ -348,23 +355,40 @@ export class LookerStudioEditor {
   }
 
   // Big moves drag the body; the last pixels are Shift+Arrow nudges (1px each).
+  // Drags the component for big moves; Shift+Arrow (exactly 1 px a press) does
+  // the rest, and everything when the drop point is off screen or the drag did
+  // not take (a text box swallows the drag as a text selection).
   private async moveBy(index: number, dx: number, dy: number): Promise<void> {
     if (Math.abs(dx) > 30 || Math.abs(dy) > 30) {
       const g = await this.geometry();
       const start = await this.clickablePoint(index);
-      await this.page.mouse.move(start.x, start.y);
-      await this.page.mouse.down();
-      await this.page.mouse.move(start.x + dx * g.scale, start.y + dy * g.scale, { steps: 15 });
-      await this.page.mouse.up();
-      await sleep(400);
-      return;
+      const end = { x: start.x + dx * g.scale, y: start.y + dy * g.scale };
+      const screen = await this.page.evaluate(() => ({
+        w: window.innerWidth,
+        h: window.innerHeight,
+      }));
+      if (end.x >= 0 && end.y >= 0 && end.x <= screen.w - 5 && end.y <= screen.h - 5) {
+        const before = (await this.layouts())[index]!;
+        await this.page.mouse.move(start.x, start.y);
+        await this.page.mouse.down();
+        await this.page.mouse.move(end.x, end.y, { steps: 15 });
+        await this.page.mouse.up();
+        await sleep(400);
+        const after = (await this.layouts())[index]!;
+        const movedX = after.x - before.x;
+        const movedY = after.y - before.y;
+        if (Math.abs(movedX) + Math.abs(movedY) > 2) return;
+      }
     }
+    // A click on an already selected text box starts editing its text, and the
+    // arrows would then move the caret: select it fresh.
+    await this.deselect();
     await this.select(index);
     for (let i = 0; i < Math.abs(dx); i++)
       await this.page.keyboard.press(dx > 0 ? 'Shift+ArrowRight' : 'Shift+ArrowLeft');
     for (let i = 0; i < Math.abs(dy); i++)
       await this.page.keyboard.press(dy > 0 ? 'Shift+ArrowDown' : 'Shift+ArrowUp');
-    await sleep(300);
+    await sleep(400);
   }
 
   // ── Data ────────────────────────────────────────────────────────────────

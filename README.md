@@ -112,7 +112,8 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `update_component` | Move/resize, Style/Setup settings, rename fields, restack (front/back), make report-level |
 | `delete_component` | Remove a component |
 | `set_theme` | Built-in theme, custom theme settings, page size |
-| `add_page`, `rename_report`, `share_report`, `delete_report` | Report management |
+| `share_report` | Invite several people at once as viewers or editors; existing access is changed in place |
+| `add_page`, `rename_report`, `delete_report` | Report management |
 
 Settings are addressed by the **label the properties panel shows** (`"Bar color"`, `"Show data labels"`, `"Border radius"`…). `describe_component` lists them; settings that do not exist come back as warnings instead of failing silently.
 
@@ -141,7 +142,8 @@ See [docs/design-guide.md](docs/design-guide.md) for the canvas grid, the card p
 - One editor action per page visit: each tool call takes a few seconds.
 - Time series need a date or date-time dimension with a sensible granularity; a raw timestamp gives "Too many rows". Add a `DATE(...)` column in a view.
 - Field chips are matched by their display name, so rename fields (`labels`) after the setup that refers to them.
-- `add_page` appends after the last page. `share_report` has not been exercised against a real recipient yet.
+- `add_page` appends after the last page.
+- `share_report` opens a visible Chrome window for a few seconds: Google refuses invitations sent from a headless browser. It sends one invitation per address, since a batch fails with "An unknown error occurred".
 
 ## Architecture
 
