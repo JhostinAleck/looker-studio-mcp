@@ -14,22 +14,53 @@ export interface BigQuerySource {
 
 export const CHART_TYPES = [
   'table',
+  'table_bars',
+  'table_heatmap',
   'scorecard',
+  'scorecard_compact',
   'time_series',
+  'smoothed_time_series',
+  'sparkline',
   'column',
   'stacked_column',
+  'stacked_100_column',
   'bar',
   'stacked_bar',
+  'stacked_100_bar',
+  'histogram',
   'pie',
   'donut',
   'line',
+  'smoothed_line',
   'area',
+  'stacked_area',
+  'stacked_100_area',
   'combo',
+  'stacked_combo',
   'geo',
+  'bubble_map',
+  'filled_map',
+  'heatmap_map',
+  'line_map',
+  'connection_map',
+  'combo_map',
   'treemap',
   'gauge',
+  'gauge_ranges',
+  'bullet',
   'pivot_table',
+  'pivot_bars',
+  'pivot_heatmap',
   'scatter',
+  'bubble',
+  'boxplot',
+  'candlestick',
+  'sankey',
+  'waterfall',
+  'timeline',
+  'funnel',
+  'funnel_stepped',
+  'funnel_triangle',
 ] as const;
 export type ChartType = (typeof CHART_TYPES)[number];
 
@@ -52,7 +83,41 @@ export interface MetricSpec {
   label?: string;
 }
 
-export interface ChartSpec {
+// A filter clause: `field` `condition` `values`, kept (include) or dropped.
+// With only `name`, an existing filter of the report is reused.
+export interface FilterSpec {
+  name: string;
+  field?: string;
+  // The label of the filter editor's condition list ("Equal to (=)", "Contains",
+  // "In", "Greater than (>)"…) or a short alias: equals, contains, in, gt, lt…
+  condition?: string;
+  values?: string[];
+  exclude?: boolean;
+}
+
+// How a metric of a combo/line chart is drawn.
+export interface SeriesSpec {
+  metric: string;
+  type?: 'line' | 'bars';
+  axis?: 'left' | 'right';
+  color?: string;
+}
+
+// Data settings shared by charts and controls, set at creation or later.
+export interface DataSettings {
+  // Extra Setup slots by heading: {"Column dimension": ["platform"], "Sparkline": ["occurred_on"]}.
+  fields?: Record<string, string[]>;
+  filters?: FilterSpec[];
+  // A preset of the date picker: "Last 28 days", "This month", "Yesterday"…
+  dateRange?: string;
+  // Scorecards and tables: "Previous period" or "Previous year".
+  comparison?: string;
+  series?: SeriesSpec[];
+  // Fixed colors per dimension value (pie slices, bars…): {"android": "#7C4DFF"}.
+  valueColors?: Record<string, string>;
+}
+
+export interface ChartSpec extends DataSettings {
   type: ChartType;
   dimensions: string[];
   metrics: MetricSpec[];
@@ -62,6 +127,29 @@ export interface ChartSpec {
   // A breakdown dimension (stacked bars, one line per value…).
   breakdown?: string;
   title?: string;
+}
+
+export const CONTROL_KINDS = [
+  'drop_down',
+  'fixed_size_list',
+  'input_box',
+  'advanced_filter',
+  'slider',
+  'checkbox',
+  'preset_filter',
+  'date_range',
+  'data_control',
+  'dimension_control',
+  'button',
+] as const;
+export type ControlKind = (typeof CONTROL_KINDS)[number];
+
+export interface ControlSpec extends DataSettings {
+  kind: ControlKind;
+  // The dimension the control filters by ("Control field").
+  field?: string;
+  // Drop-downs and lists can show a metric next to each value.
+  metric?: string;
 }
 
 // Position and size in report pixels (the canvas is 1200×900 unless changed).
@@ -134,39 +222,154 @@ export function reportUrl(id: string, mode: 'view' | 'edit' = 'view'): string {
   return `https://lookerstudio.google.com/reporting/${id}${mode === 'edit' ? '/edit' : ''}`;
 }
 
-const SINGLE_VALUE: ChartType[] = ['scorecard', 'gauge'];
-const MULTI_DIMENSION: ChartType[] = ['table', 'pivot_table'];
-const WITH_BREAKDOWN: ChartType[] = [
-  'column',
-  'stacked_column',
-  'bar',
-  'stacked_bar',
-  'line',
-  'area',
-  'time_series',
-  'combo',
-];
+type Range = readonly [min: number, max: number];
+interface ChartShape {
+  dimensions: Range;
+  metrics: Range;
+  breakdown?: boolean;
+}
+const ANY: Range = [0, Infinity];
+const ONE: Range = [1, 1];
+const SOME: Range = [1, Infinity];
+const SINGLE_VALUE: ChartShape = { dimensions: [0, 0], metrics: ONE };
+const BY_ONE: ChartShape = { dimensions: ONE, metrics: SOME };
+const SERIES: ChartShape = { dimensions: ONE, metrics: SOME, breakdown: true };
+const TABULAR: ChartShape = { dimensions: SOME, metrics: SOME };
+const PIVOT: ChartShape = { dimensions: SOME, metrics: SOME };
+// Maps, timelines and candlesticks fill their own slots through `fields`.
+const FREE: ChartShape = { dimensions: ANY, metrics: ANY };
 
-// Each chart type needs a certain shape of fields; checked before touching the editor.
+// The fields each chart type takes; checked before touching the editor.
+const SHAPES: Record<ChartType, ChartShape> = {
+  table: TABULAR,
+  table_bars: TABULAR,
+  table_heatmap: TABULAR,
+  scorecard: SINGLE_VALUE,
+  scorecard_compact: SINGLE_VALUE,
+  time_series: SERIES,
+  smoothed_time_series: SERIES,
+  sparkline: SERIES,
+  column: SERIES,
+  stacked_column: SERIES,
+  stacked_100_column: SERIES,
+  bar: SERIES,
+  stacked_bar: SERIES,
+  stacked_100_bar: SERIES,
+  histogram: { dimensions: ONE, metrics: [0, 0], breakdown: true },
+  pie: BY_ONE,
+  donut: BY_ONE,
+  line: SERIES,
+  smoothed_line: SERIES,
+  area: SERIES,
+  stacked_area: SERIES,
+  stacked_100_area: SERIES,
+  combo: SERIES,
+  stacked_combo: SERIES,
+  geo: BY_ONE,
+  bubble_map: FREE,
+  filled_map: FREE,
+  heatmap_map: FREE,
+  line_map: FREE,
+  connection_map: FREE,
+  combo_map: FREE,
+  treemap: { dimensions: SOME, metrics: ONE },
+  gauge: SINGLE_VALUE,
+  gauge_ranges: SINGLE_VALUE,
+  bullet: { dimensions: [0, 0], metrics: SOME },
+  pivot_table: PIVOT,
+  pivot_bars: PIVOT,
+  pivot_heatmap: PIVOT,
+  scatter: { dimensions: ONE, metrics: [2, 3] },
+  bubble: { dimensions: ONE, metrics: [2, 3] },
+  boxplot: FREE,
+  candlestick: FREE,
+  sankey: { dimensions: [2, Infinity], metrics: ONE },
+  waterfall: BY_ONE,
+  timeline: FREE,
+  funnel: BY_ONE,
+  funnel_stepped: BY_ONE,
+  funnel_triangle: BY_ONE,
+};
+
+function describeRange([min, max]: Range, noun: string): string {
+  if (min === max) return `exactly ${min} ${noun}${min === 1 ? '' : 's'}`;
+  if (max === Infinity) return `at least ${min} ${noun}${min === 1 ? '' : 's'}`;
+  return `${min} to ${max} ${noun}s`;
+}
+
 export function validateChart(spec: ChartSpec): ChartSpec {
-  if (spec.metrics.length === 0) throw new InvalidChartError('A chart needs at least one metric.');
-  if (SINGLE_VALUE.includes(spec.type)) {
-    if (spec.dimensions.length > 0 || spec.metrics.length > 1) {
-      throw new InvalidChartError(`A ${spec.type} shows exactly one metric and no dimensions.`);
+  const shape = SHAPES[spec.type];
+  const [dMin, dMax] = shape.dimensions;
+  const [mMin, mMax] = shape.metrics;
+  const nd = spec.dimensions.length;
+  const nm = spec.metrics.length;
+  if (shape === FREE) {
+    if (nd + nm === 0 && Object.keys(spec.fields ?? {}).length === 0) {
+      throw new InvalidChartError(
+        `A ${spec.type} chart needs fields: pass dimensions/metrics or its Setup slots in \`fields\`.`,
+      );
     }
-  } else if (MULTI_DIMENSION.includes(spec.type)) {
-    if (spec.dimensions.length === 0) {
-      throw new InvalidChartError(`A ${spec.type} needs at least one dimension.`);
+  } else {
+    if (nd < dMin || nd > dMax) {
+      throw new InvalidChartError(
+        `A ${spec.type} chart takes ${describeRange(shape.dimensions, 'dimension')}.`,
+      );
     }
-  } else if (spec.dimensions.length !== 1) {
-    throw new InvalidChartError(`A ${spec.type} chart needs exactly one dimension.`);
+    if (nm < mMin || nm > mMax) {
+      throw new InvalidChartError(
+        `A ${spec.type} chart takes ${describeRange(shape.metrics, 'metric')}.`,
+      );
+    }
   }
-  if (spec.type === 'scatter' && spec.metrics.length < 2) {
-    throw new InvalidChartError('A scatter chart needs two metrics (X and Y).');
-  }
-  if (spec.breakdown && !WITH_BREAKDOWN.includes(spec.type)) {
+  if (spec.breakdown && !shape.breakdown) {
     throw new InvalidChartError(`A ${spec.type} chart does not take a breakdown dimension.`);
   }
+  validateDataSettings(spec);
+  return spec;
+}
+
+export function validateDataSettings(data: DataSettings): DataSettings {
+  for (const [section, fields] of Object.entries(data.fields ?? {})) {
+    if (!section.trim()) throw new InvalidChartError('Setup slot names cannot be empty.');
+    if (fields.some((f) => !f.trim())) {
+      throw new InvalidChartError(`Field names for "${section}" cannot be empty.`);
+    }
+  }
+  for (const filter of data.filters ?? []) {
+    if (!filter.name.trim()) throw new InvalidChartError('Every filter needs a name.');
+    if (filter.field !== undefined && !filter.condition) {
+      throw new InvalidChartError(`Filter "${filter.name}" has a field but no condition.`);
+    }
+    if (filter.field === undefined && (filter.condition || filter.values?.length)) {
+      throw new InvalidChartError(`Filter "${filter.name}" has a condition but no field.`);
+    }
+  }
+  for (const series of data.series ?? []) {
+    if (!series.metric.trim()) throw new InvalidChartError('Every series needs its metric.');
+    if (series.color !== undefined && !HEX_COLOR_RE.test(series.color)) {
+      throw new InvalidChartError(`Series color "${series.color}" is not a #RRGGBB color.`);
+    }
+  }
+  for (const [value, color] of Object.entries(data.valueColors ?? {})) {
+    if (!HEX_COLOR_RE.test(color)) {
+      throw new InvalidChartError(`Color "${color}" for "${value}" is not a #RRGGBB color.`);
+    }
+  }
+  if (data.dateRange !== undefined && !data.dateRange.trim()) {
+    throw new InvalidChartError('date_range cannot be empty.');
+  }
+  return data;
+}
+
+export function validateControl(spec: ControlSpec): ControlSpec {
+  const fieldless: ControlKind[] = ['date_range', 'data_control', 'button', 'preset_filter'];
+  if (!fieldless.includes(spec.kind) && !spec.field?.trim()) {
+    throw new InvalidChartError(`A ${spec.kind} control needs the field it filters by.`);
+  }
+  if (spec.kind !== 'date_range' && spec.comparison) {
+    throw new InvalidChartError('Only charts take a comparison date range.');
+  }
+  validateDataSettings(spec);
   return spec;
 }
 

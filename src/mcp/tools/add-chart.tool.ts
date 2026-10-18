@@ -1,5 +1,5 @@
 import { addChart } from '@/contexts/reports/application/reportUseCases.js';
-import { addChartSchema } from '@/mcp/schemas.js';
+import { addChartSchema, toDataSettings } from '@/mcp/schemas.js';
 import { runWrite, text, type ToolResult, type WriteDeps } from '@/mcp/tool-helpers.js';
 
 import { placedMessage, toLayout } from './component-format.js';
@@ -22,8 +22,10 @@ export async function handleAddChart(
     ...(input.breakdown ? { breakdown: input.breakdown } : {}),
     ...(input.sort_by ? { sortBy: input.sort_by } : {}),
     ...(input.title ? { title: input.title } : {}),
+    ...toDataSettings(input),
   };
-  const what = `${input.type} chart of ${chart.metrics.map((m) => m.field).join(', ')}${input.dimensions.length ? ` by ${input.dimensions.join(', ')}` : ''}`;
+  const of = chart.metrics.length ? ` of ${chart.metrics.map((m) => m.field).join(', ')}` : '';
+  const what = `${input.type} chart${of}${input.dimensions.length ? ` by ${input.dimensions.join(', ')}` : ''}`;
   return runWrite(deps, 'add_chart', { ...input }, `add a ${what}`, async () => {
     const placed = await addChart(deps.reportRepo, input.report_id, chart, {
       ...(input.layout ? { layout: toLayout(input.layout) } : {}),

@@ -80,6 +80,52 @@ For a light report: theme `Simple`, background `#F6F7FB`, cards `#FFFFFF` with `
 {"tool": "update_component", "index": 8, "labels": {"feature_label": "Feature"}}
 ```
 
+**Filter bar and logo**
+
+```json
+{"tool": "add_control", "kind": "date_range", "date_range": "Last 28 days",
+ "layout": {"x": 760, "y": 30, "width": 260, "height": 40}}
+{"tool": "add_control", "kind": "drop_down", "field": "platform",
+ "layout": {"x": 520, "y": 30, "width": 220, "height": 40}}
+{"tool": "add_image", "image": "/path/to/logo.png", "layout": {"x": 1060, "y": 20, "width": 100, "height": 60}}
+```
+
+**KPI with change vs. the previous period and a sparkline**
+
+```json
+{"tool": "add_chart", "type": "scorecard", "dimensions": [],
+ "metrics": [{"field": "Record Count", "label": "Uses"}],
+ "comparison": "Previous period", "fields": {"Sparkline": ["occurred_on"]},
+ "style": {"Positive change color": "#2E7D32", "Negative change color": "#C62828"}}
+```
+
+**Heatmap matrix** (rows × columns, colored by value)
+
+```json
+{"tool": "add_chart", "type": "pivot_heatmap", "dimensions": ["feature_label"],
+ "metrics": [{"field": "Record Count"}], "fields": {"Column dimension": ["platform"]}}
+```
+
+**Bars and a line on a second axis**
+
+```json
+{"tool": "add_chart", "type": "combo", "dimensions": ["occurred_on"],
+ "metrics": [{"field": "Record Count", "label": "Uses"}, {"field": "uid", "aggregation": "count_distinct", "label": "Students"}],
+ "series": [{"metric": "Uses", "type": "bars", "color": "#7C4DFF"},
+            {"metric": "Students", "type": "line", "axis": "right", "color": "#FF6D00"}]}
+```
+
+**Fixed colors per value and chart filters**
+
+```json
+{"tool": "add_chart", "type": "donut", "dimensions": ["platform"], "metrics": [{"field": "Record Count"}],
+ "value_colors": {"android": "#3DDC84", "ios": "#0A84FF"}}
+{"tool": "add_chart", "type": "table", "dimensions": ["feature_label"], "metrics": [{"field": "Record Count"}],
+ "filters": [{"name": "Android only", "field": "platform", "condition": "equals", "values": ["android"]}]}
+```
+
+**Tabs between pages**: `set_theme` with `"layout": {"Navigation type": "Tab"}`.
+
 ## Finding the right setting
 
 1. `describe_component` on the component: it prints every toggle, field and radio of the Setup and Style tabs with its current value.

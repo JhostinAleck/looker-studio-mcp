@@ -9,7 +9,7 @@ import type {
 import { HEX_COLOR_RE } from '@/contexts/reports/domain/Report.js';
 import { InfrastructureError } from '@/shared-kernel/errors/InfrastructureError.js';
 
-import { BASE, HL, SECTION, SEL, cssEscape } from './selectors.js';
+import { BASE, HL, SECTION, SEL, cssEscape, datePresetPath, escapeRegExp } from './selectors.js';
 
 export class EditorStepError extends InfrastructureError {
   readonly code = 'LOOKER_STUDIO_EDITOR';
@@ -120,17 +120,25 @@ export class LookerStudioEditor {
   // Menus are Angular Material: click the menu, then the item whose text starts with `item`.
   async clickMenu(menu: string, path: string[]): Promise<void> {
     await this.step(`open ${menu} › ${path.join(' › ')}`, () =>
-      this.walkMenu(menu, path).catch(async (err: unknown) => {
-        // A menu left open swallows every later click: close it before failing.
-        for (let i = 0; i <= path.length; i++) await this.page.keyboard.press('Escape');
-        throw err;
-      }),
+      this.walkMenu(
+        () => this.page.getByRole('button', { name: menu, exact: true }).first().click(),
+        path,
+      ),
     );
     await this.settle(400);
   }
 
-  private async walkMenu(menu: string, path: string[]): Promise<void> {
-    await this.page.getByRole('button', { name: menu, exact: true }).first().click();
+  // Opens a menu through any trigger (`open`) and clicks the item at the end of `path`.
+  async walkMenu(open: () => Promise<void>, path: string[]): Promise<void> {
+    await this.walkOpenMenu(open, path).catch(async (err: unknown) => {
+      // A menu left open swallows every later click: close it before failing.
+      for (let i = 0; i <= path.length; i++) await this.page.keyboard.press('Escape');
+      throw err;
+    });
+  }
+
+  private async walkOpenMenu(open: () => Promise<void>, path: string[]): Promise<void> {
+    await open();
     await sleep(500); // let the menu finish its open animation before measuring items
     let from: { x: number; y: number } | null = null;
     for (const [i, item] of path.entries()) {
@@ -260,6 +268,7 @@ export class LookerStudioEditor {
     const point = await this.clickablePoint(index);
     await this.page.mouse.click(point.x, point.y);
     await sleep(700);
+    await this.closeDatePopup();
     return this.panelTitle();
   }
 
@@ -276,12 +285,24 @@ export class LookerStudioEditor {
     return ((await title.textContent({ timeout: 3_000 }).catch(() => null)) ?? '').trim();
   }
 
-  // Inserts with the current tool by clicking the canvas, and returns the new component's index.
-  async placeAt(x: number, y: number, insert: () => Promise<void>): Promise<number> {
+  // Inserts with the current tool by clicking the canvas, and returns the new
+  // component's index. Tools that take no default size (images) draw the box
+  // by dragging out `size` instead.
+  async placeAt(
+    x: number,
+    y: number,
+    insert: () => Promise<void>,
+    size?: { width: number; height: number },
+  ): Promise<number> {
     const before = await this.layouts();
     await insert();
     const point = await this.toScreen(x, y);
-    await this.page.mouse.click(point.x, point.y);
+    if (size) {
+      const end = await this.toScreen(x + size.width, y + size.height);
+      await this.slowDrag(point, end);
+    } else {
+      await this.page.mouse.click(point.x, point.y);
+    }
     return this.step('place the new component', async () => {
       const deadline = Date.now() + this.timeoutMs;
       while (Date.now() < deadline) {
@@ -297,6 +318,20 @@ export class LookerStudioEditor {
       }
       throw new Error('no component appeared on the canvas');
     });
+  }
+
+  // Images take a quick drag for a click: pause at each end.
+  private async slowDrag(
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+  ): Promise<void> {
+    await this.page.mouse.move(from.x, from.y);
+    await sleep(300);
+    await this.page.mouse.down();
+    await sleep(200);
+    await this.page.mouse.move(to.x, to.y, { steps: 25 });
+    await sleep(200);
+    await this.page.mouse.up();
   }
 
   async undo(): Promise<void> {
@@ -331,14 +366,13 @@ export class LookerStudioEditor {
         const g = await this.geometry();
         const fromX = g.originX + (current.x + current.width) * g.scale - 1;
         const fromY = g.originY + (current.y + current.height) * g.scale - 1;
-        await this.page.mouse.move(fromX, fromY);
-        await this.page.mouse.down();
-        await this.page.mouse.move(
-          fromX + (width - current.width) * g.scale,
-          fromY + (height - current.height) * g.scale,
-          { steps: 12 },
+        await this.slowDrag(
+          { x: fromX, y: fromY },
+          {
+            x: fromX + (width - current.width) * g.scale,
+            y: fromY + (height - current.height) * g.scale,
+          },
         );
-        await this.page.mouse.up();
         await sleep(400);
       }
 
@@ -681,6 +715,273 @@ export class LookerStudioEditor {
     await this.settle(500);
   }
 
+  // ── Dates, filters and series ──────────────────────────────────────────
+
+  // Charts choose between the data source's dates ("Auto") and their own
+  // ("Custom"); the date range control only has the picker.
+  async setDateRange(preset: string): Promise<void> {
+    const path = datePresetPath(preset);
+    await this.step(`set the date range to ${preset}`, async () => {
+      await this.closeDatePopup();
+      await this.openTab('Setup');
+      // The picker only shows once "Custom" is on.
+      const find = (what: 'custom' | 'picker') =>
+        this.page
+          .locator(SEL.propertiesPanel)
+          .first()
+          .evaluate((panel, what) => {
+            const el =
+              what === 'custom'
+                ? panel.querySelector<HTMLInputElement>(
+                    'input[type=radio][aria-label="radio button: Custom"]',
+                  )
+                : panel.querySelector('button.ng2-date-picker-button');
+            if (!el || (el instanceof HTMLInputElement && el.checked)) return null;
+            el.scrollIntoView({ block: 'center' });
+            const r = el.getBoundingClientRect();
+            return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+          }, what);
+      const custom = await find('custom');
+      if (custom) {
+        await this.page.mouse.click(custom.x, custom.y);
+        await sleep(700);
+      }
+      const picker = await find('picker');
+      if (!picker) throw new Error('the Setup tab has no date range picker');
+      await this.page.mouse.click(picker.x, picker.y);
+      await this.pickInDatePopup(path);
+    });
+    await this.settle(500);
+  }
+
+  // "Previous period", "Previous year" or "None".
+  async setComparison(preset: string): Promise<void> {
+    await this.step(`compare with ${preset}`, async () => {
+      await this.openTab('Setup');
+      const panel = this.page.locator(SEL.propertiesPanel).first();
+      const toggle = panel.locator('button[role=switch][aria-label="Comparison date range"]');
+      const on = (await toggle.getAttribute('aria-checked')) === 'true';
+      const off = /^none$/i.test(preset.trim());
+      if (on === off) await toggle.click();
+      if (off) return;
+      await sleep(600);
+      await panel.locator('button[aria-label^="Comparison date range "]').first().click();
+      await this.pickInDatePopup([preset.trim()]);
+    });
+    await this.settle(500);
+  }
+
+  // Selecting a date range control by a click also opens its own picker.
+  async closeDatePopup(): Promise<void> {
+    const cancel = this.page
+      .locator('.cdk-overlay-container')
+      .getByRole('button', { name: 'Cancel', exact: true });
+    if (await cancel.isVisible().catch(() => false)) {
+      await cancel.click();
+      await sleep(500);
+    }
+  }
+
+  // The date popup has a preset menu button next to the calendars, and Apply.
+  private async pickInDatePopup(path: string[]): Promise<void> {
+    await sleep(800);
+    const trigger = await this.page.evaluate(() => {
+      const apply = [...document.querySelectorAll<HTMLElement>('button')]
+        .filter((b) => b.offsetParent !== null && b.textContent?.trim() === 'Apply')
+        .pop();
+      for (let box = apply?.parentElement; box; box = box.parentElement) {
+        const menu = [...box.querySelectorAll<HTMLElement>('button')].find(
+          (b) =>
+            b !== apply && b.offsetParent !== null && b.textContent?.includes('arrow_drop_down'),
+        );
+        if (menu) {
+          const r = menu.getBoundingClientRect();
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        }
+      }
+      return null;
+    });
+    if (!trigger) throw new Error('the date picker did not open');
+    await this.walkMenu(() => this.page.mouse.click(trigger.x, trigger.y), path);
+    await sleep(500);
+    await this.page.getByRole('button', { name: 'Apply', exact: true }).last().click();
+    await sleep(600);
+  }
+
+  // Adds a filter to the selected chart or control: an existing one by name,
+  // or a new one-clause filter. Returns false when an existing filter was reused.
+  async addFilter(filter: {
+    name: string;
+    field?: string;
+    condition?: string;
+    values?: string[];
+    exclude?: boolean;
+  }): Promise<boolean> {
+    return this.step(`add the filter "${filter.name}"`, async () => {
+      await this.openTab('Setup');
+      await this.revealSection(/^Filter$/);
+      await this.page
+        .locator(SEL.propertiesPanel)
+        .getByText('Add filter', { exact: true })
+        .first()
+        .click();
+      await sleep(900);
+      const overlay = this.page.locator('.cdk-overlay-container');
+      const existing = overlay.getByText(filter.name, { exact: true });
+      if (await existing.count()) {
+        await existing.first().click();
+        await sleep(600);
+        return false;
+      }
+      if (!filter.field) {
+        await this.page.keyboard.press('Escape');
+        throw new Error(`the report has no filter named "${filter.name}"`);
+      }
+      await overlay.getByText('Create a filter', { exact: true }).first().click();
+      const name = this.page.getByPlaceholder('Filter name');
+      await name.waitFor({ timeout: this.timeoutMs });
+      await name.fill(filter.name);
+      if (filter.exclude) {
+        await this.chooseOption('mat-select[placeholder="Select a negation option"]', 'Exclude');
+      }
+      await this.page.getByText('Select a field', { exact: true }).last().click();
+      await sleep(600);
+      await this.page.keyboard.type(filter.field, { delay: 20 });
+      await sleep(600);
+      await this.page
+        .locator('.display-name-highlighted')
+        .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(filter.field)}\\s*$`) })
+        .last()
+        .click();
+      await sleep(800);
+      await this.chooseOption('mat-select[placeholder="Select a condition"]', filter.condition!);
+      const inputs = this.page.locator('input[aria-label="Input for filter value"]');
+      for (const [i, value] of (filter.values ?? []).entries()) {
+        const input = (await inputs.count()) > i ? inputs.nth(i) : inputs.last();
+        await input.click();
+        await this.page.keyboard.type(value, { delay: 10 });
+        await this.page.keyboard.press('Enter');
+        await sleep(300);
+      }
+      const save = this.page.getByRole('button', { name: 'Button to save the filter' });
+      if (await save.isDisabled()) {
+        await this.page
+          .getByRole('button', { name: 'Button to cancel the filter changes' })
+          .click();
+        throw new Error(
+          'the filter editor would not save it (check the field, condition and values)',
+        );
+      }
+      await save.click();
+      await save.waitFor({ state: 'hidden', timeout: this.timeoutMs });
+      await sleep(600);
+      return true;
+    });
+  }
+
+  private async chooseOption(select: string, option: string): Promise<void> {
+    await this.page.locator(select).last().click();
+    await sleep(500);
+    const item = this.page.getByRole('option', { name: option, exact: true });
+    if (!(await item.count())) {
+      const options = (await this.page.getByRole('option').allTextContents()).map((o) => o.trim());
+      await this.page.keyboard.press('Escape');
+      throw new Error(`"${option}" is not one of: ${options.join(', ')}`);
+    }
+    await item.first().click();
+    await sleep(500);
+  }
+
+  // Line/bars, axis and color of each metric of a combo or line chart.
+  async setSeries(
+    series: Array<{
+      metric: string;
+      type?: 'line' | 'bars';
+      axis?: 'left' | 'right';
+      color?: string;
+    }>,
+  ): Promise<string[]> {
+    await this.openTab('Style');
+    const missing: string[] = [];
+    for (const s of series) {
+      const notFound = await this.applySettings({ 'Select metric': s.metric });
+      if (notFound.length) {
+        missing.push(`series ${s.metric}`);
+        continue;
+      }
+      const settings: StyleSettings = {
+        ...(s.type ? { [s.type === 'bars' ? 'Bars' : 'Line']: true } : {}),
+        ...(s.axis ? { [s.axis === 'right' ? 'Right' : 'Left']: true } : {}),
+      };
+      missing.push(...(await this.applySettings(settings)).map((m) => `${m} of ${s.metric}`));
+      if (s.color) {
+        const colored = await this.firstSetting(['Line color', 'Bar color', 'Color'], s.color);
+        if (!colored) missing.push(`color of ${s.metric}`);
+      }
+    }
+    return missing;
+  }
+
+  // In an open color palette: Add custom color, type the hex, Done.
+  private async pickCustomColor(color: string): Promise<void> {
+    await this.page
+      .getByRole('button', { name: 'Add custom color' })
+      .last()
+      .click({ timeout: 5_000 });
+    const hex = this.page.locator('mat-dialog-container input[aria-label="Hex"]').last();
+    await hex.fill(color.replace('#', '').toUpperCase());
+    await hex.press('Enter');
+    await this.page.getByRole('button', { name: 'Done', exact: true }).last().click();
+  }
+
+  // Style › Manage dimension value colors: one mapping per value, shared by
+  // every chart of the report that shows that dimension value.
+  async setValueColors(colors: Record<string, string>): Promise<void> {
+    await this.step('set the dimension value colors', async () => {
+      await this.openTab('Style');
+      await this.applySettings({ 'Dimension values': true });
+      const panel = this.page.locator(SEL.propertiesPanel);
+      await panel.getByText('Manage dimension value colors', { exact: true }).first().click();
+      await this.page
+        .getByRole('button', { name: 'Add a value button' })
+        .waitFor({ timeout: this.timeoutMs });
+      for (const [value, color] of Object.entries(colors)) {
+        await this.page.getByRole('button', { name: 'Add a value button' }).click();
+        const dialog = this.page.locator('mat-dialog-container', { hasText: 'Add A Value' });
+        await dialog.waitFor({ timeout: this.timeoutMs });
+        await dialog.locator('button').first().click();
+        await sleep(400);
+        await this.pickCustomColor(color);
+        await sleep(300);
+        // fill() leaves Create disabled: the dialog listens for keystrokes.
+        await dialog.getByRole('textbox', { name: 'Enter a value textbox' }).click();
+        await this.page.keyboard.type(value, { delay: 15 });
+        await sleep(300);
+        await dialog.getByRole('button', { name: 'Create value button' }).click();
+        await dialog.waitFor({ state: 'hidden', timeout: this.timeoutMs });
+      }
+      await this.page.getByRole('button', { name: 'Close', exact: true }).last().click();
+    });
+    await this.settle(600);
+  }
+
+  // Whether a switch of the open properties panel is on; null when it has none.
+  async toggleState(label: string): Promise<boolean | null> {
+    const toggle = this.page
+      .locator(`${SEL.propertiesPanel} button[role=switch][aria-label="${cssEscape(label)}"]`)
+      .first();
+    if (!(await toggle.count())) return null;
+    return (await toggle.getAttribute('aria-checked')) === 'true';
+  }
+
+  // Applies `value` to the first of `labels` the panel has.
+  async firstSetting(labels: string[], value: string | number | boolean): Promise<boolean> {
+    for (const label of labels) {
+      if ((await this.applySettings({ [label]: value })).length === 0) return true;
+    }
+    return false;
+  }
+
   // Clicking a metric chip opens its field editor: display name and aggregation.
   async editMetric(index: number, edit: { aggregation?: string; label?: string }): Promise<void> {
     await this.step(`edit metric ${index + 1}`, async () => {
@@ -890,14 +1191,7 @@ export class LookerStudioEditor {
 
     if (typeof value === 'string' && HEX_COLOR_RE.test(value)) {
       await field.click();
-      await this.page
-        .getByRole('button', { name: 'Add custom color' })
-        .last()
-        .click({ timeout: 5_000 });
-      const hex = this.page.locator('mat-dialog-container input[aria-label="Hex"]').last();
-      await hex.fill(value.replace('#', '').toUpperCase());
-      await hex.press('Enter');
-      await this.page.getByRole('button', { name: 'Done', exact: true }).last().click();
+      await this.pickCustomColor(value);
       return true;
     }
 
@@ -931,7 +1225,22 @@ export class LookerStudioEditor {
     );
     const indexes = labels.flatMap((l, i) => (l.toLowerCase() === label.toLowerCase() ? [i] : []));
     const index = indexes[nth];
-    return index === undefined ? null : fields.nth(index);
+    if (index !== undefined) return fields.nth(index);
+    // Some settings (Layout › Navigation type) put the label in a cell of its
+    // own: the control is in the next cell that holds one.
+    const cells = this.page.locator(`${scope} [data-webdriver-cell-key]`);
+    const cellIndex = await cells.evaluateAll(
+      (els, { wanted, nth }) => {
+        const hits = els.flatMap((e, i) =>
+          e.querySelector('label.value')?.textContent?.trim().toLowerCase() === wanted ? [i] : [],
+        );
+        const at = hits[nth];
+        if (at === undefined) return -1;
+        return els.findIndex((e, i) => i > at && e.querySelector('mat-select, input') !== null);
+      },
+      { wanted: label.toLowerCase(), nth },
+    );
+    return cellIndex < 0 ? null : cells.nth(cellIndex);
   }
 
   // ── Report-level actions ───────────────────────────────────────────────

@@ -1,5 +1,7 @@
 import type {
+  CalculatedFieldSpec,
   ComponentChange,
+  ImageSpec,
   PlaceOptions,
   ReportPage,
   ReportRepository,
@@ -12,12 +14,15 @@ import {
   type ChartSpec,
   type ComponentDetails,
   type ComponentInfo,
+  type ControlSpec,
   type ReportSummary,
   type StyleSettings,
   HEX_COLOR_RE,
   InvalidChartError,
   parseReportId,
   validateChart,
+  validateControl,
+  validateDataSettings,
   validateLayout,
   validateSettings,
 } from '@/contexts/reports/domain/Report.js';
@@ -119,6 +124,51 @@ export async function addShape(
   return repo.addShape(parseReportId(report), shape, checkPlace(opts));
 }
 
+export async function addControl(
+  repo: ReportRepository,
+  report: string,
+  control: ControlSpec,
+  opts: ChartOptions = {},
+): Promise<ComponentInfo> {
+  return repo.addControl(parseReportId(report), validateControl(control), checkPlace(opts));
+}
+
+const IMAGE_RE = /\.(png|jpe?g|gif|svg|webp)$/i;
+
+export async function addImage(
+  repo: ReportRepository,
+  report: string,
+  image: ImageSpec,
+  opts: StyledPlace = {},
+  // Size in bytes of the file, or null when there is none.
+  sizeOf: (path: string) => number | null = () => 1,
+): Promise<ComponentInfo> {
+  if (!IMAGE_RE.test(image.path)) {
+    throw new InvalidChartError('The image must be a .png, .jpg, .gif, .svg or .webp file.');
+  }
+  const size = sizeOf(image.path);
+  if (size === null) throw new InvalidChartError(`No file at ${image.path}.`);
+  if (size === 0) throw new InvalidChartError(`${image.path} is empty.`);
+  return repo.addImage(parseReportId(report), image, checkPlace(opts));
+}
+
+export async function addCalculatedField(
+  repo: ReportRepository,
+  report: string,
+  field: CalculatedFieldSpec,
+  dataSource?: string,
+): Promise<void> {
+  const name = field.name.trim();
+  const formula = field.formula.trim();
+  if (!name) throw new InvalidChartError('The field needs a name.');
+  if (!formula) throw new InvalidChartError('The field needs a formula.');
+  return repo.addCalculatedField(
+    parseReportId(report),
+    { name, formula },
+    dataSource?.trim() || undefined,
+  );
+}
+
 export async function listComponents(
   repo: ReportRepository,
   report: string,
@@ -146,20 +196,29 @@ export async function updateComponent(
   if (change.layout) validateLayout(change.layout);
   if (change.style) validateSettings(change.style);
   if (change.setup) validateSettings(change.setup);
+  validateDataSettings(change);
   const labels = Object.entries(change.labels ?? {});
   if (labels.some(([from, to]) => !from.trim() || !to.trim())) {
     throw new InvalidChartError('Field labels cannot be empty.');
   }
+  const data =
+    Object.keys(change.fields ?? {}).length > 0 ||
+    (change.filters?.length ?? 0) > 0 ||
+    !!change.dateRange ||
+    !!change.comparison ||
+    (change.series?.length ?? 0) > 0 ||
+    Object.keys(change.valueColors ?? {}).length > 0;
   if (
     !change.layout &&
     !change.style &&
     !change.setup &&
     !change.order &&
     change.reportLevel === undefined &&
-    labels.length === 0
+    labels.length === 0 &&
+    !data
   ) {
     throw new InvalidChartError(
-      'Nothing to change: pass layout, style, setup, labels, order or reportLevel.',
+      'Nothing to change: pass layout, style, setup, labels, order, report_level or a data setting (fields, filters, date_range, comparison, series, value_colors).',
     );
   }
   return repo.updateComponent(parseReportId(report), index, change, page);
@@ -179,10 +238,11 @@ export async function setTheme(
   report: string,
   theme: ThemeSpec,
 ): Promise<void> {
-  if (!theme.preset && !theme.settings && !theme.canvas) {
-    throw new InvalidChartError('Pass a preset, settings or a canvas size.');
+  if (!theme.preset && !theme.settings && !theme.canvas && !theme.layout) {
+    throw new InvalidChartError('Pass a preset, settings, layout settings or a canvas size.');
   }
   if (theme.settings) validateSettings(theme.settings);
+  if (theme.layout) validateSettings(theme.layout);
   if (theme.canvas) validateLayout({ ...theme.canvas });
   return repo.setTheme(parseReportId(report), theme);
 }

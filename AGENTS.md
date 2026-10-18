@@ -54,4 +54,8 @@ npm test             # vitest watch
 - New components land with their top-left at the click and a default size up to 400×300; place them where the resize handle stays on screen, resize, then move.
 - The viewer clips pages taller than the window: `screenshot` grows the window through CDP first.
 - Text boxes ignore drags; move them with Shift+Arrow (1 px per press). A click on a selected text box enters text editing, so deselect first.
+- Date pickers (chart "Custom" range, date range control, comparison) open a popup with a preset menu button and Apply; presets like "Last 28 days" sit in a submenu named after its first entry ("Last 7 days").
+- Filters: Setup › Add filter lists the report's filters by name, then "Create a filter": name, Include/Exclude, field picker, condition `mat-select`, value chip inputs, Save.
+- Images and value-color dialogs ignore `fill()` on some inputs; type with the keyboard. A clicked image lands at 0×0: drag its box out.
+- Some settings (Layout › Navigation type) put the label in its own cell; `findField` falls back to the next cell with a control.
 - Sharing: Google refuses invitations from a headless browser and from a Send with several chips. One address per Send, in a visible window (`withPage(work, { visible: true })`). Changing an existing person's role closes the dialog.

@@ -106,12 +106,15 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `create_report` | New report connected to a BigQuery table or view |
 | `add_data_source` | Connect another BigQuery table to a report |
 | `refresh_data_source` | Re-read a data source's fields after a column was added to the table or view |
-| `add_chart` | Table, scorecard, time series, column, bar, pie, donut, line, area, combo, geo, treemap, gauge, pivot table, scatter — with dimensions, metrics (aggregation, display name), breakdown, sort, title, layout and Style settings |
+| `add_chart` | All 48 chart presets: tables (with bars/heatmap), scorecards (compact, sparkline), time series, bars (stacked, 100%), histogram, pie, donut, line, area, combo, pivot tables (with bars/heatmap), funnel, waterfall, sankey, bullet, gauge, treemap, scatter, bubble, boxplot, candlestick, timeline, geo and Google Maps — with dimensions, metrics (aggregation, display name), breakdown, sort, extra Setup slots, filters, default date range, comparison period, combo series, value colors, title, layout and Style settings |
+| `add_control` | Drop-down, fixed-size list, input box, advanced filter, slider, checkbox, preset filter, date range, data control, dimension control, button |
+| `add_image` | Logo or header art from a local file or https URL |
+| `add_calculated_field` | A formula field on a data source (ratios, CASE groupings, date parts) |
 | `add_text` | Text box: size, color, bold, alignment, background |
 | `add_shape` | Rectangle, circle, triangle, heart, diamond, pentagon, star, hexagon, octagon, cylinder: fill, border, radius |
-| `update_component` | Move/resize, Style/Setup settings, rename fields, restack (front/back), make report-level |
+| `update_component` | Move/resize, Style/Setup settings, Setup slots, filters, date range, comparison, series, value colors, rename fields, restack (front/back), make report-level |
 | `delete_component` | Remove a component |
-| `set_theme` | Built-in theme, custom theme settings, page size |
+| `set_theme` | Built-in theme, custom theme settings, page size, Layout settings (tab navigation, header) |
 | `share_report` | Invite several people at once as viewers or editors; existing access is changed in place |
 | `add_page`, `rename_report`, `delete_report` | Report management |
 

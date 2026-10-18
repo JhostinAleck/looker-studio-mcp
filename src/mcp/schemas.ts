@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
-import { AGGREGATIONS, CHART_TYPES } from '@/contexts/reports/domain/Report.js';
+import { AGGREGATIONS, CHART_TYPES, CONTROL_KINDS } from '@/contexts/reports/domain/Report.js';
 import { ORDER_MOVES, SHAPE_KINDS } from '@/contexts/reports/domain/ReportRepository.js';
+import type { DataSettings } from '@/contexts/reports/domain/Report.js';
 
 const projectId = z
   .string()
@@ -42,6 +43,118 @@ const settings = z
       'Colors take #RRGGBB, switches true/false, dropdowns their option text. Repeat a label as "Label#2" for its second occurrence. ' +
       'describe_component lists every label of a component.',
   );
+
+// Data settings shared by add_chart, add_control and update_component.
+const dataShape = {
+  fields: z
+    .record(z.string(), z.array(z.string()).min(1))
+    .optional()
+    .describe(
+      'More Setup slots by their heading, e.g. {"Column dimension":["platform"]} (pivot heatmap), {"Sparkline":["occurred_on"]} (scorecard), {"Weight metric":["Record Count"]}, {"Start time":["occurred_at"]}. describe_component shows the headings.',
+    ),
+  filters: z
+    .array(
+      z.object({
+        name: z.string().min(1).describe('Filter name; an existing filter of the report is reused'),
+        field: z
+          .string()
+          .optional()
+          .describe('Field to filter on (omit to reuse a filter by name)'),
+        condition: z
+          .string()
+          .optional()
+          .describe(
+            'equals, contains, starts_with, regexp_match, regexp_contains, in, is_null, gt, gte, lt, lte, between, or the editor label ("Equal to (=)")',
+          ),
+        values: z.array(z.string()).optional().describe('Values; several for "in" and "between"'),
+        exclude: z.boolean().default(false).describe('Drop matching rows instead of keeping them'),
+      }),
+    )
+    .optional()
+    .describe('Filters applied to this chart or control'),
+  date_range: z
+    .string()
+    .optional()
+    .describe(
+      'Default date range preset: Today, Yesterday, Last 7 days, Last 14 days, Last 28 days, Last 30 days, Last month, Last quarter, Last year, This week (starts Monday), This month, This month to date, This quarter, This year, This year to date… ("Auto date range" for all dates)',
+    ),
+  comparison: z
+    .string()
+    .optional()
+    .describe(
+      'Comparison date range: "Previous period", "Previous year" or "None" (scorecards, tables)',
+    ),
+  series: z
+    .array(
+      z.object({
+        metric: z.string().describe('Metric as the chart names it (its display name)'),
+        type: z.enum(['line', 'bars']).optional(),
+        axis: z.enum(['left', 'right']).optional(),
+        color: color.optional(),
+      }),
+    )
+    .optional()
+    .describe('Per-metric series of combo/line charts: bars or line, left or right axis, color'),
+  value_colors: z
+    .record(z.string(), color)
+    .optional()
+    .describe('Fixed color per dimension value, e.g. {"android":"#3DDC84","ios":"#0A84FF"}'),
+};
+
+type DataInput = {
+  fields?: Record<string, string[]> | undefined;
+  filters?:
+    | Array<{
+        name: string;
+        field?: string | undefined;
+        condition?: string | undefined;
+        values?: string[] | undefined;
+        exclude: boolean;
+      }>
+    | undefined;
+  date_range?: string | undefined;
+  comparison?: string | undefined;
+  series?:
+    | Array<{
+        metric: string;
+        type?: 'line' | 'bars' | undefined;
+        axis?: 'left' | 'right' | undefined;
+        color?: string | undefined;
+      }>
+    | undefined;
+  value_colors?: Record<string, string> | undefined;
+};
+
+// Snake-case tool input to the domain's DataSettings.
+export function toDataSettings(input: DataInput): DataSettings {
+  return {
+    ...(input.fields ? { fields: input.fields } : {}),
+    ...(input.filters
+      ? {
+          filters: input.filters.map((f) => ({
+            name: f.name,
+            ...(f.field ? { field: f.field } : {}),
+            ...(f.condition ? { condition: f.condition } : {}),
+            ...(f.values ? { values: f.values } : {}),
+            ...(f.exclude ? { exclude: true } : {}),
+          })),
+        }
+      : {}),
+    ...(input.date_range ? { dateRange: input.date_range } : {}),
+    ...(input.comparison ? { comparison: input.comparison } : {}),
+    ...(input.series
+      ? {
+          series: input.series.map((x) => ({
+            metric: x.metric,
+            ...(x.type ? { type: x.type } : {}),
+            ...(x.axis ? { axis: x.axis } : {}),
+            ...(x.color ? { color: x.color } : {}),
+          })),
+        }
+      : {}),
+    ...(input.value_colors ? { valueColors: input.value_colors } : {}),
+  };
+}
 
 export const checkAuthSchema = z.object({});
 
@@ -116,7 +229,8 @@ export const addChartSchema = z.object({
           .describe('Display name, e.g. "Total uses" instead of "Record Count"'),
       }),
     )
-    .min(1),
+    .default([])
+    .describe('Metrics; histograms and timelines take none'),
   breakdown: z
     .string()
     .optional()
@@ -127,6 +241,50 @@ export const addChartSchema = z.object({
   layout: layout.optional(),
   style: settings.optional().describe('Style tab settings applied after the chart is placed'),
   page,
+  data_source: z.string().optional().describe('Data source name when the report has several'),
+  ...dataShape,
+});
+
+export const addControlSchema = z.object({
+  report_id: reportId,
+  kind: z.enum(CONTROL_KINDS),
+  field: z
+    .string()
+    .optional()
+    .describe('Dimension the control filters by (not for date_range, data_control, button)'),
+  metric: z.string().optional().describe('Metric shown next to each value (drop-downs, lists)'),
+  layout: layout.optional(),
+  style: settings
+    .optional()
+    .describe(
+      'Style tab settings, e.g. {"Fixed-size":true,"Single-select":true,"Background":"#151B33"}',
+    ),
+  page,
+  data_source: z.string().optional().describe('Data source name when the report has several'),
+  ...dataShape,
+});
+
+export const addImageSchema = z.object({
+  report_id: reportId,
+  image: z
+    .string()
+    .min(1)
+    .describe('Local path or https URL of a .png/.jpg/.gif/.svg/.webp (logos, header art)'),
+  alt_text: z.string().optional(),
+  layout: layout.optional(),
+  style: settings.optional().describe('e.g. {"Border radius":12,"Opacity":"80%"}'),
+  page,
+});
+
+export const addCalculatedFieldSchema = z.object({
+  report_id: reportId,
+  name: z.string().min(1).describe('Field name as it will appear in the data panel'),
+  formula: z
+    .string()
+    .min(1)
+    .describe(
+      'Looker Studio formula, e.g. COUNT_DISTINCT(uid), SUM(a)/SUM(b), CASE WHEN platform = "android" THEN "Android" ELSE "Other" END',
+    ),
   data_source: z.string().optional().describe('Data source name when the report has several'),
 });
 
@@ -184,6 +342,7 @@ export const updateComponentSchema = z.object({
     .describe('Restack it: front, back, forward, backward. Changes its index.'),
   report_level: z.boolean().optional().describe('true shows it on every page (headers, logos)'),
   page,
+  ...dataShape,
 });
 
 export const deleteComponentSchema = z.object({ report_id: reportId, index, page });
@@ -208,6 +367,11 @@ export const setThemeSchema = z.object({
     })
     .optional()
     .describe('Page size in px'),
+  layout: settings
+    .optional()
+    .describe(
+      'Theme and layout › Layout settings, e.g. {"Navigation type":"Tab","Header visibility":"Always show"}',
+    ),
 });
 
 export const addPageSchema = z.object({ report_id: reportId, name: z.string().min(1) });

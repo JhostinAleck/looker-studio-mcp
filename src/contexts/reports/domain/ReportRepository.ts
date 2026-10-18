@@ -3,6 +3,8 @@ import type {
   ChartSpec,
   ComponentDetails,
   ComponentInfo,
+  ControlSpec,
+  DataSettings,
   Layout,
   ReportSummary,
   StyleSettings,
@@ -49,12 +51,24 @@ export interface ShapeSpec {
   borderRadius?: number;
 }
 
+export interface ImageSpec {
+  // A local PNG, JPG, GIF or SVG file.
+  path: string;
+  altText?: string;
+}
+
+export interface CalculatedFieldSpec {
+  name: string;
+  // Looker Studio formula, e.g. COUNT_DISTINCT(uid) or CASE WHEN … END.
+  formula: string;
+}
+
 export const ORDER_MOVES = ['front', 'back', 'forward', 'backward'] as const;
 export type OrderMove = (typeof ORDER_MOVES)[number];
 
 // What updateComponent can change. `order` restacks the component, which
 // changes its index: the result reports the new one.
-export interface ComponentChange {
+export interface ComponentChange extends DataSettings {
   layout?: Partial<Layout>;
   style?: StyleSettings;
   setup?: StyleSettings;
@@ -71,6 +85,8 @@ export interface ThemeSpec {
   // Edit Theme fields by label, e.g. {"Report background color": "#0B1020"}.
   settings?: StyleSettings;
   canvas?: { width?: number; height?: number };
+  // Theme and layout › Layout settings by label: {"Navigation type": "Tab"}.
+  layout?: StyleSettings;
 }
 
 export interface ReportRepository {
@@ -95,6 +111,22 @@ export interface ReportRepository {
     shape: ShapeSpec,
     opts: PlaceOptions & { style?: StyleSettings },
   ): Promise<ComponentInfo>;
+  addControl(
+    reportId: string,
+    control: ControlSpec,
+    opts: PlaceOptions & { dataSource?: string; style?: StyleSettings },
+  ): Promise<ComponentInfo>;
+  addImage(
+    reportId: string,
+    image: ImageSpec,
+    opts: PlaceOptions & { style?: StyleSettings },
+  ): Promise<ComponentInfo>;
+  // Adds a calculated field to a data source (the report's only one when `dataSource` is omitted).
+  addCalculatedField(
+    reportId: string,
+    field: CalculatedFieldSpec,
+    dataSource?: string,
+  ): Promise<void>;
   listComponents(reportId: string, page?: number): Promise<ComponentInfo[]>;
   // Every setting of a component (Setup and Style tabs) with its current value.
   describeComponent(reportId: string, index: number, page?: number): Promise<ComponentDetails>;

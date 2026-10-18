@@ -5,8 +5,11 @@ import * as schemas from './schemas.js';
 import { errorResult, type ToolResult, type WriteDeps } from './tool-helpers.js';
 import type { BigQueryToolDeps } from './tools/bigquery-deps.js';
 import type { ReportToolDeps } from './tools/reports-deps.js';
+import { handleAddCalculatedField } from './tools/add-calculated-field.tool.js';
 import { handleAddChart } from './tools/add-chart.tool.js';
+import { handleAddControl } from './tools/add-control.tool.js';
 import { handleAddDataSource } from './tools/add-data-source.tool.js';
+import { handleAddImage } from './tools/add-image.tool.js';
 import { handleAddPage } from './tools/add-page.tool.js';
 import { handleAddShape } from './tools/add-shape.tool.js';
 import { handleAddText } from './tools/add-text.tool.js';
@@ -184,7 +187,7 @@ const TOOLS: ToolDef[] = [
     name: 'add_chart',
     title: 'Add a chart',
     description:
-      'Add a chart (table, scorecard, time_series, column, bar, pie, donut, line, …) with its dimensions, metrics (aggregation, display name), breakdown and sort, at an exact layout and with Style settings.\nUse "Record Count" to count rows. Check the result with screenshot_report.',
+      'Add any of the 48 Looker Studio charts (tables with bars/heatmap, scorecards, time series, bars, pies, combos, pivot heatmaps, funnels, waterfalls, sankeys, bullets, maps, …) with dimensions, metrics (aggregation, display name), breakdown, sort, extra Setup slots, filters, default date range, comparison, combo series and value colors, at an exact layout and with Style settings.\nUse "Record Count" to count rows. Check the result with screenshot_report.',
     schema: schemas.addChartSchema,
     write: true,
     run: handleAddChart,
@@ -208,10 +211,37 @@ const TOOLS: ToolDef[] = [
     run: handleAddShape,
   },
   {
+    name: 'add_control',
+    title: 'Add a filter control',
+    description:
+      'Add a control viewers filter the page with: drop-down list, fixed-size list, input box, advanced filter, slider, checkbox, preset filter, date range control, data control, dimension control or button.\nControls filter every chart on the page that uses the same data source.',
+    schema: schemas.addControlSchema,
+    write: true,
+    run: handleAddControl,
+  },
+  {
+    name: 'add_image',
+    title: 'Add an image',
+    description:
+      'Upload an image (logo, header art) from a local path or https URL and place it on the page.',
+    schema: schemas.addImageSchema,
+    write: true,
+    run: handleAddImage,
+  },
+  {
+    name: 'add_calculated_field',
+    title: 'Add a calculated field',
+    description:
+      'Add a calculated field to a data source with a Looker Studio formula (ratios, CASE groupings, date parts). Charts and controls then use it by name.',
+    schema: schemas.addCalculatedFieldSchema,
+    write: true,
+    run: handleAddCalculatedField,
+  },
+  {
     name: 'update_component',
     title: 'Update a component',
     description:
-      'Move or resize a component, change its Style/Setup settings, rename its fields, restack it (front/back) or make it report-level.',
+      'Move or resize a component, change its Style/Setup settings, fill Setup slots, add filters, set its date range or comparison, style combo series, color dimension values, rename its fields, restack it (front/back) or make it report-level.',
     schema: schemas.updateComponentSchema,
     write: true,
     run: handleUpdateComponent,
@@ -228,7 +258,7 @@ const TOOLS: ToolDef[] = [
     name: 'set_theme',
     title: 'Set the report theme',
     description:
-      'Apply a built-in theme and/or custom theme settings (background, fonts, chart colors) and the page size.',
+      'Apply a built-in theme and/or custom theme settings (background, fonts, chart colors), the page size and Layout settings such as tab navigation between pages.',
     schema: schemas.setThemeSchema,
     write: true,
     run: handleSetTheme,

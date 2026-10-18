@@ -6,7 +6,9 @@ import {
   parseReportId,
   reportUrl,
   validateChart,
+  validateControl,
 } from '@/contexts/reports/domain/Report.js';
+import { datePresetPath } from '@/contexts/reports/infrastructure/ui/selectors.js';
 import { buildLinkingUrl } from '@/contexts/reports/domain/linking.js';
 
 const ID = '1a2b3c4d-0000-4000-8000-1234567890ab';
@@ -58,6 +60,78 @@ describe('validateChart', () => {
     expect(() =>
       validateChart({ type: 'pie', dimensions: ['x'], metrics: metric, breakdown: 'y' }),
     ).toThrow(InvalidChartError);
+  });
+});
+
+describe('chart shapes beyond the basics', () => {
+  const metric = [{ field: 'Record Count' }];
+
+  it('takes a histogram without metrics and a sankey with two dimensions', () => {
+    expect(validateChart({ type: 'histogram', dimensions: ['age'], metrics: [] }).type).toBe(
+      'histogram',
+    );
+    expect(() =>
+      validateChart({ type: 'histogram', dimensions: ['age'], metrics: metric }),
+    ).toThrow(/exactly 0 metrics/);
+    expect(() => validateChart({ type: 'sankey', dimensions: ['a'], metrics: metric })).toThrow(
+      /at least 2 dimensions/,
+    );
+  });
+
+  it('lets maps and timelines fill their own slots, but not stay empty', () => {
+    const timeline = {
+      type: 'timeline' as const,
+      dimensions: [],
+      metrics: [],
+      fields: { 'Row label': ['event_id'], 'Start time': ['occurred_at'] },
+    };
+    expect(validateChart(timeline)).toBe(timeline);
+    expect(() => validateChart({ type: 'bubble_map', dimensions: [], metrics: [] })).toThrow(
+      /needs fields/,
+    );
+  });
+
+  it('checks filters, series and value colors', () => {
+    const base = { type: 'combo' as const, dimensions: ['day'], metrics: metric };
+    expect(() =>
+      validateChart({ ...base, filters: [{ name: 'Android', field: 'platform' }] }),
+    ).toThrow(/no condition/);
+    expect(() =>
+      validateChart({ ...base, filters: [{ name: 'Android', condition: 'equals' }] }),
+    ).toThrow(/no field/);
+    expect(() => validateChart({ ...base, series: [{ metric: 'Uses', color: 'red' }] })).toThrow(
+      /#RRGGBB/,
+    );
+    expect(() => validateChart({ ...base, valueColors: { android: '#12345' } })).toThrow(/#RRGGBB/);
+    expect(
+      validateChart({
+        ...base,
+        filters: [{ name: 'Android only' }],
+        series: [{ metric: 'Uses', type: 'line', axis: 'right', color: '#FF6D00' }],
+      }).series,
+    ).toHaveLength(1);
+  });
+});
+
+describe('validateControl', () => {
+  it('needs a field except for date range, data control, button and preset filter', () => {
+    expect(() => validateControl({ kind: 'drop_down' })).toThrow(/needs the field/);
+    expect(validateControl({ kind: 'drop_down', field: 'platform' }).kind).toBe('drop_down');
+    expect(validateControl({ kind: 'date_range', dateRange: 'Last 28 days' }).kind).toBe(
+      'date_range',
+    );
+    expect(() =>
+      validateControl({ kind: 'drop_down', field: 'x', comparison: 'Previous period' }),
+    ).toThrow(InvalidChartError);
+  });
+});
+
+describe('datePresetPath', () => {
+  it('finds presets in their submenu, ignoring case', () => {
+    expect(datePresetPath('last 28 days')).toEqual(['Last 7 days', 'Last 28 days']);
+    expect(datePresetPath('This month')).toEqual(['This month', 'This month']);
+    expect(datePresetPath('Yesterday')).toEqual(['Yesterday']);
+    expect(() => datePresetPath('Last 3 days')).toThrow(/not a date range preset/);
   });
 });
 

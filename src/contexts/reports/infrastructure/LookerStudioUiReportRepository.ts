@@ -5,7 +5,9 @@ import type { Locator, Page } from 'playwright';
 
 import type { BrowserSession } from '@/contexts/authentication/domain/BrowserSession.js';
 import type {
+  CalculatedFieldSpec,
   ComponentChange,
+  ImageSpec,
   OrderMove,
   PlaceOptions,
   ReportPage,
@@ -20,6 +22,9 @@ import {
   type ChartSpec,
   type ComponentDetails,
   type ComponentInfo,
+  type ControlSpec,
+  type DataSettings,
+  type FilterSpec,
   type Layout,
   type ReportSummary,
   type StyleSettings,
@@ -31,12 +36,15 @@ import { EditorStepError, LookerStudioEditor } from './ui/LookerStudioEditor.js'
 import {
   BASE,
   CHART_PRESETS,
+  CONTROL_LABELS,
+  FILTER_CONDITIONS,
   HL,
   PANEL_TITLE_HINT,
   SECTION,
   SEL,
   SHAPE_ICONS,
   cssEscape,
+  sectionNamed,
 } from './ui/selectors.js';
 
 export interface LookerStudioUiOptions {
@@ -132,17 +140,10 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   async refreshDataSources(reportId: string, name?: string): Promise<string[]> {
     return this.edit(reportId, async (editor) => {
       const page = editor.page;
-      const openList = async () => {
-        await editor.clickMenu('Resource', ['Manage added data sources']);
-        await page.locator('tr, [role=row]').nth(1).waitFor({ timeout: this.opts.stepTimeoutMs });
-      };
-      await openList();
-      const sources = await page.evaluate(() =>
-        [...document.querySelectorAll('tr, [role=row]')]
-          .slice(1)
-          .map((r) => r.querySelector('td, [role=cell]')?.textContent?.trim() ?? '')
-          .filter(Boolean),
-      );
+      await editor.clickMenu('Resource', ['Manage added data sources']);
+      await page.locator('tr, [role=row]').nth(1).waitFor({ timeout: this.opts.stepTimeoutMs });
+      const sources = await this.listedSources(editor);
+      await page.keyboard.press('Escape');
       const targets = name ? sources.filter((s) => s === name) : sources;
       if (targets.length === 0) {
         throw new EditorStepError(
@@ -150,26 +151,10 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         );
       }
       const added: string[] = [];
-      for (const [i, source] of targets.entries()) {
-        if (i > 0) await openList();
+      for (const source of targets) {
+        await this.openSourceEditor(editor, source);
         await editor.step(`refresh the fields of ${source}`, async () => {
-          // The row buttons are upper-cased by CSS; find "Edit" by text in the row.
-          const point = await page.evaluate((wanted) => {
-            const row = [...document.querySelectorAll('tr, [role=row]')].find(
-              (r) => r.querySelector('td, [role=cell]')?.textContent?.trim() === wanted,
-            );
-            const button = [...(row?.querySelectorAll('button') ?? [])].find((b) =>
-              /^edit$/i.test(b.textContent?.trim() ?? ''),
-            );
-            if (!button) return null;
-            const r = button.getBoundingClientRect();
-            return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-          }, source);
-          if (!point) throw new Error('its Edit button was not found');
-          await page.mouse.click(point.x, point.y);
-          const refresh = page.getByRole('button', { name: 'REFRESH FIELDS' });
-          await refresh.waitFor({ timeout: this.opts.stepTimeoutMs });
-          await refresh.click();
+          await page.getByRole('button', { name: 'REFRESH FIELDS' }).click();
           const dialog = page.locator('mat-dialog-container', {
             hasText: 'Apply Connection Changes',
           });
@@ -250,7 +235,17 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   ): Promise<ComponentInfo> {
     let final = (await editor.layouts())[index]!;
     if (layout && Object.keys(layout).length > 0) {
+      // An image keeping its aspect ratio collapses to 0x0 when its handle is
+      // dragged sideways: let it stretch while resizing, then restore it.
+      const resizing = layout.width !== undefined || layout.height !== undefined;
+      const image = resizing && /^Image/.test(await editor.select(index));
+      const aspect = image ? await editor.toggleState('Preserve Aspect Ratio') : null;
+      if (aspect) await editor.applySettings({ 'Preserve Aspect Ratio': false });
       final = await editor.applyLayout(index, layout);
+      if (aspect) {
+        await editor.select(index);
+        await editor.applySettings({ 'Preserve Aspect Ratio': true });
+      }
       // Looker Studio snaps some sizes (and keeps shapes inside the canvas); say so.
       const off = (Object.keys(layout) as Array<keyof Layout>).filter(
         (k) => Math.abs(final[k] - layout[k]!) > 2,
@@ -311,11 +306,13 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     if (chart.type === 'time_series' || chart.dimensions.length > 0) {
       await editor.setSectionFields(SECTION.dimensions, chart.dimensions, 'the dimensions');
     }
-    await editor.setSectionFields(
-      SECTION.metrics,
-      chart.metrics.map((m) => m.field),
-      'the metrics',
-    );
+    if (chart.metrics.length > 0) {
+      await editor.setSectionFields(
+        SECTION.metrics,
+        chart.metrics.map((m) => m.field),
+        'the metrics',
+      );
+    }
     for (const [i, metric] of chart.metrics.entries()) {
       if (!metric.aggregation && metric.label === undefined) continue;
       await editor.editMetric(i, {
@@ -340,6 +337,8 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       );
     }
 
+    warnings.push(...(await this.applyData(editor, chart)));
+
     const style: StyleSettings = {
       ...(chart.title ? { 'Show title': true } : {}),
       ...(opts.style ?? {}),
@@ -350,6 +349,212 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       if (chart.title) warnings.push(...(await this.setChartTitle(editor, chart.title)));
     }
     return this.finish(editor, index, opts.layout, warnings);
+  }
+
+  // Setup slots, filters, dates, series and value colors of a chart or control.
+  private async applyData(editor: LookerStudioEditor, data: DataSettings): Promise<string[]> {
+    const warnings: string[] = [];
+    for (const [section, fields] of Object.entries(data.fields ?? {})) {
+      await editor.setSectionFields(sectionNamed(section), fields, `the "${section}" slot`);
+    }
+    for (const filter of data.filters ?? []) {
+      const created = await editor.addFilter(this.filterClause(filter));
+      if (!created && filter.field)
+        warnings.push(`filter "${filter.name}" already existed and was reused as it is`);
+    }
+    if (data.dateRange) await editor.setDateRange(data.dateRange);
+    if (data.comparison) await editor.setComparison(data.comparison);
+    if (data.series?.length) warnings.push(...(await editor.setSeries(data.series)));
+    if (data.valueColors && Object.keys(data.valueColors).length > 0) {
+      await editor.setValueColors(data.valueColors);
+    }
+    return warnings;
+  }
+
+  private filterClause(filter: FilterSpec): FilterSpec {
+    if (!filter.condition) return filter;
+    const condition = FILTER_CONDITIONS[filter.condition.trim().toLowerCase()] ?? filter.condition;
+    return { ...filter, condition };
+  }
+
+  async addControl(
+    reportId: string,
+    control: ControlSpec,
+    opts: PlaceOptions & { dataSource?: string; style?: StyleSettings },
+  ): Promise<ComponentInfo> {
+    return this.edit(reportId, async (editor) => {
+      await this.goToPage(editor, opts.page);
+      const spot = await this.spotFor(editor, opts.layout);
+      const label = CONTROL_LABELS[control.kind];
+      const index = await editor.placeAt(spot.x, spot.y, () => editor.clickMenu('Insert', [label]));
+      await editor.select(index);
+      try {
+        if (opts.dataSource) await editor.chooseDataSource(opts.dataSource);
+        if (control.field)
+          await editor.setSectionFields(SECTION.control, [control.field], 'the control field');
+        if (control.metric)
+          await editor.setSectionFields(SECTION.metrics, [control.metric], 'the metric');
+        const warnings = await this.applyData(editor, control);
+        if (opts.style && Object.keys(opts.style).length > 0) {
+          await editor.openTab('Style');
+          warnings.push(...(await editor.applySettings(opts.style)));
+        }
+        return await this.finish(editor, index, opts.layout, warnings);
+      } catch (err) {
+        await editor.select(index).catch(() => undefined);
+        await editor.page.keyboard.press('Delete').catch(() => undefined);
+        await editor.settle().catch(() => undefined);
+        throw err;
+      }
+    });
+  }
+
+  async addImage(
+    reportId: string,
+    image: ImageSpec,
+    opts: PlaceOptions & { style?: StyleSettings },
+  ): Promise<ComponentInfo> {
+    return this.edit(reportId, async (editor) => {
+      await this.goToPage(editor, opts.page);
+      const spot = await this.spotFor(editor, opts.layout);
+      // A clicked image comes in at 0x0, out of reach: drag its box out, and
+      // undo and drag again if the editor took the drag for a click.
+      const size = { width: 200, height: 150 };
+      let index: number;
+      for (let attempt = 1; ; attempt++) {
+        index = await editor.placeAt(
+          spot.x,
+          spot.y,
+          () => editor.clickMenu('Insert', ['Image']),
+          size,
+        );
+        const box = (await editor.layouts())[index]!;
+        if (box.width > 0 && box.height > 0) break;
+        await editor.undo();
+        if (attempt === 3) throw new EditorStepError('the image box could not be drawn');
+      }
+      await editor.select(index);
+      await editor.openTab('Setup');
+      const file = image.path.split(/[\\/]/).pop()!;
+      await editor.step(`upload ${file}`, async () => {
+        const chooser = editor.page.waitForEvent('filechooser', {
+          timeout: this.opts.stepTimeoutMs,
+        });
+        await editor.page
+          .locator(SEL.propertiesPanel)
+          .getByText('Select a file', { exact: true })
+          .first()
+          .click();
+        await (await chooser).setFiles(image.path);
+        await editor.page
+          .locator(SEL.propertiesPanel)
+          .getByText(file, { exact: true })
+          .first()
+          .waitFor({ timeout: this.opts.stepTimeoutMs });
+      });
+      await editor.settle(1500);
+      const warnings = image.altText
+        ? await editor.applySettings({ 'Alt text': image.altText })
+        : [];
+      if (opts.style && Object.keys(opts.style).length > 0) {
+        await editor.openTab('Style');
+        warnings.push(...(await editor.applySettings(opts.style)));
+      }
+      return this.finish(editor, index, opts.layout, warnings);
+    });
+  }
+
+  async addCalculatedField(
+    reportId: string,
+    field: CalculatedFieldSpec,
+    dataSource?: string,
+  ): Promise<void> {
+    await this.edit(reportId, async (editor) => {
+      const page = editor.page;
+      await this.openSourceEditor(editor, dataSource);
+      await editor.step(`add the calculated field ${field.name}`, async () => {
+        await page.getByRole('button', { name: 'Add a field' }).last().click();
+        await page.getByText('Add calculated field', { exact: true }).last().click();
+        const name = page.locator('input[formcontrolname="fieldNameInputControl"]');
+        await name.waitFor({ timeout: this.opts.stepTimeoutMs });
+        await name.fill(field.name);
+        // The formula box is CodeMirror 5: typing would auto-close quotes and
+        // brackets, so set the text through its API.
+        const set = await page.evaluate((formula) => {
+          const host = document.querySelector('ng2-code-mirror-formula .CodeMirror') as
+            (Element & { CodeMirror?: { setValue(v: string): void; focus(): void } }) | null;
+          if (!host?.CodeMirror) return false;
+          host.CodeMirror.setValue(formula);
+          host.CodeMirror.focus();
+          return true;
+        }, field.formula);
+        if (!set) throw new Error('the formula box was not found');
+        await editor.settle(800);
+        const save = page.getByRole('button', { name: 'Save', exact: true }).last();
+        if (await save.isDisabled()) {
+          // The editor explains the problem under the formula box.
+          const text = await page
+            .locator('.new-calculated-fields-container')
+            .innerText()
+            .catch(() => '');
+          const error = text
+            .split('\n')
+            .find((l) => /error|invalid|unknown|expect|syntax|not found/i.test(l));
+          throw new Error(`the formula was not accepted${error ? `: ${error.trim()}` : ''}`);
+        }
+        await save.click();
+        await editor.settle(1500);
+        await page
+          .getByRole('button', { name: 'Done', exact: true })
+          .first()
+          .click({ timeout: this.opts.stepTimeoutMs });
+        await editor.settle(800);
+      });
+    });
+  }
+
+  // Resource › Manage added data sources › Edit, for `name` or the only source.
+  private async openSourceEditor(editor: LookerStudioEditor, name?: string): Promise<void> {
+    const page = editor.page;
+    await editor.clickMenu('Resource', ['Manage added data sources']);
+    await page.locator('tr, [role=row]').nth(1).waitFor({ timeout: this.opts.stepTimeoutMs });
+    const sources = await this.listedSources(editor);
+    const source = name ?? (sources.length === 1 ? sources[0] : undefined);
+    if (!source || !sources.includes(source)) {
+      throw new EditorStepError(
+        name
+          ? `no data source named "${name}" (the report has ${sources.join(', ') || 'none'})`
+          : `the report has several data sources; name one of: ${sources.join(', ')}`,
+      );
+    }
+    await editor.step(`edit the data source ${source}`, async () => {
+      // The row buttons are upper-cased by CSS; find "Edit" by text in the row.
+      const point = await page.evaluate((wanted) => {
+        const row = [...document.querySelectorAll('tr, [role=row]')].find(
+          (r) => r.querySelector('td, [role=cell]')?.textContent?.trim() === wanted,
+        );
+        const button = [...(row?.querySelectorAll('button') ?? [])].find((b) =>
+          /^edit$/i.test(b.textContent?.trim() ?? ''),
+        );
+        if (!button) return null;
+        const r = button.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      }, source);
+      if (!point) throw new Error('its Edit button was not found');
+      await page.mouse.click(point.x, point.y);
+      await page
+        .getByRole('button', { name: 'REFRESH FIELDS' })
+        .waitFor({ timeout: this.opts.stepTimeoutMs });
+    });
+  }
+
+  private listedSources(editor: LookerStudioEditor): Promise<string[]> {
+    return editor.page.evaluate(() =>
+      [...document.querySelectorAll('tr, [role=row]')]
+        .slice(1)
+        .map((r) => r.querySelector('td, [role=cell]')?.textContent?.trim() ?? '')
+        .filter(Boolean),
+    );
   }
 
   // With "Show title" on, the Style tab shows a text box for the title.
@@ -528,6 +733,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       for (const [from, to] of Object.entries(change.labels ?? {})) {
         await editor.relabelField(from, to);
       }
+      warnings.push(...(await this.applyData(editor, change)));
       if (change.setup && Object.keys(change.setup).length > 0) {
         await editor.openTab('Setup');
         warnings.push(...(await editor.applySettings(change.setup)));
@@ -606,7 +812,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
           .click()
           .catch(() => undefined);
       }
-      if (theme.canvas) {
+      if (theme.canvas || theme.layout) {
         await editor.page
           .getByRole('button', { name: 'Theme and layout' })
           .click()
@@ -614,13 +820,14 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         const layoutScope = await this.scopeFor(editor, 'Theme and Layout', 'layout');
         await editor.page.locator(layoutScope).getByText('Layout', { exact: true }).first().click();
         await editor.settle(500);
-        const sizes: StyleSettings = {
-          ...(theme.canvas.width ? { 'Width (px)': theme.canvas.width } : {}),
-          ...(theme.canvas.height ? { 'Height (px)': theme.canvas.height } : {}),
+        const settings: StyleSettings = {
+          ...theme.layout,
+          ...(theme.canvas?.width ? { 'Width (px)': theme.canvas.width } : {}),
+          ...(theme.canvas?.height ? { 'Height (px)': theme.canvas.height } : {}),
         };
-        const missing = await editor.applySettings(sizes, layoutScope);
+        const missing = await editor.applySettings(settings, layoutScope);
         if (missing.length)
-          throw new EditorStepError(`could not set the canvas size (${missing.join(', ')})`);
+          throw new EditorStepError(`the Layout tab has no settings named: ${missing.join(', ')}`);
       }
     });
   }
