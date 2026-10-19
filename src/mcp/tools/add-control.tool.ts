@@ -1,5 +1,5 @@
 import { addControl } from '@/contexts/reports/application/reportUseCases.js';
-import { addControlSchema, toDataSettings } from '@/mcp/schemas.js';
+import { addControlSchema, toButton, toDataSettings } from '@/mcp/schemas.js';
 import { runWrite, text, type ToolResult, type WriteDeps } from '@/mcp/tool-helpers.js';
 
 import { placedMessage, toLayout } from './component-format.js';
@@ -14,6 +14,7 @@ export async function handleAddControl(
     kind: input.kind,
     ...(input.field ? { field: input.field } : {}),
     ...(input.metric ? { metric: input.metric } : {}),
+    ...(input.button ? { button: toButton(input.button) } : {}),
     ...toDataSettings(input),
   };
   const what = `a ${input.kind.replace(/_/g, ' ')} control${input.field ? ` on ${input.field}` : ''}`;

@@ -6,9 +6,19 @@ import {
   addChart,
   addControl,
   addImage,
+  addBinField,
+  addEmbed,
+  addGroupField,
+  addLine,
+  addParameter,
   addShape,
   addText,
+  arrangeComponents,
+  createBlend,
   deleteReport,
+  manageFilter,
+  managePage,
+  setScopeSettings,
   listReports,
   setTheme,
   shareReport,
@@ -36,6 +46,17 @@ function fakeRepo(): ReportRepository {
     addControl: vi.fn(async () => placed),
     addImage: vi.fn(async () => placed),
     addCalculatedField: vi.fn(async () => undefined),
+    addLine: vi.fn(async () => placed),
+    addEmbed: vi.fn(async () => placed),
+    duplicateComponent: vi.fn(async () => placed),
+    arrangeComponents: vi.fn(async () => [placed]),
+    managePage: vi.fn(async () => [{ index: 1, name: 'Overview' }]),
+    setScopeSettings: vi.fn(async () => []),
+    manageFilter: vi.fn(async () => undefined),
+    addParameter: vi.fn(async () => undefined),
+    addGroupField: vi.fn(async () => undefined),
+    addBinField: vi.fn(async () => undefined),
+    createBlend: vi.fn(async () => undefined),
     listComponents: vi.fn(async () => [placed]),
     describeComponent: vi.fn(),
     updateComponent: vi.fn(async () => placed),
@@ -207,5 +228,103 @@ describe('report use cases', () => {
       settings: { 'Report background color': '#0B1020' },
     });
     expect(repo.setTheme).toHaveBeenCalledOnce();
+  });
+
+  it('checks AND/OR filters, fixed dates and the new data settings', async () => {
+    const repo = fakeRepo();
+    await updateComponent(repo, ID, 0, {
+      filters: [
+        {
+          name: 'Mobile',
+          clauses: [
+            [
+              { field: 'platform', condition: 'equals', values: ['android'] },
+              { field: 'platform', condition: 'equals', values: ['ios'] },
+            ],
+          ],
+        },
+      ],
+      dateRange: '2026-10-01..2026-10-15',
+      sorts: [{ field: 'feature' }],
+      referenceBands: [{ from: 1, to: 2, color: '#FFE082' }],
+    });
+    expect(repo.updateComponent).toHaveBeenCalled();
+    await expect(
+      updateComponent(repo, ID, 0, { dateRange: '2026-10-15..2026-10-01' }),
+    ).rejects.toThrow(InvalidChartError);
+    await expect(
+      updateComponent(repo, ID, 0, { filters: [{ name: 'Empty', clauses: [[]] }] }),
+    ).rejects.toThrow(InvalidChartError);
+    await expect(
+      updateComponent(repo, ID, 0, { referenceBands: [{ from: 3, to: 1 }] }),
+    ).rejects.toThrow(InvalidChartError);
+    await expect(
+      updateComponent(repo, ID, 0, {
+        conditionalFormats: [{ rules: [[{ field: 'x', condition: 'gt', value: '1' }]] }],
+      }),
+    ).rejects.toThrow(InvalidChartError);
+  });
+
+  it('accepts a chart type switch, a button and an embed URL as changes', async () => {
+    const repo = fakeRepo();
+    await updateComponent(repo, ID, 0, { chartType: 'line' });
+    await updateComponent(repo, ID, 0, { button: { action: 'link', page: 'Overview' } });
+    await expect(updateComponent(repo, ID, 0, { embedUrl: 'ftp://x' })).rejects.toThrow(
+      InvalidChartError,
+    );
+    await expect(updateComponent(repo, ID, 0, { button: { action: 'link' } })).rejects.toThrow(
+      InvalidChartError,
+    );
+  });
+
+  it('checks lines, embeds, arrange and pages', async () => {
+    const repo = fakeRepo();
+    await addLine(repo, ID, { from: { x: 0, y: 10 }, to: { x: 100, y: 10 } });
+    await expect(addLine(repo, ID, { from: { x: 5, y: 5 }, to: { x: 5, y: 5 } })).rejects.toThrow(
+      InvalidChartError,
+    );
+    await addEmbed(repo, ID, 'https://example.com');
+    await expect(arrangeComponents(repo, ID, [1, 2], 'distribute_horizontally')).rejects.toThrow(
+      InvalidChartError,
+    );
+    await arrangeComponents(repo, ID, [1, 1, 2], 'align_left');
+    expect(repo.arrangeComponents).toHaveBeenCalledWith(ID, [1, 2], 'align_left', undefined);
+    await expect(managePage(repo, ID, 0, 'delete')).rejects.toThrow(InvalidChartError);
+  });
+
+  it('needs something to set on a page and an edit for a filter', async () => {
+    const repo = fakeRepo();
+    await expect(setScopeSettings(repo, ID, 'page', {})).rejects.toThrow(InvalidChartError);
+    await setScopeSettings(repo, ID, 'report', { dateRange: 'Last 28 days' });
+    await expect(manageFilter(repo, ID, 'edit', 'Mobile')).rejects.toThrow(InvalidChartError);
+    await manageFilter(repo, ID, 'delete', ' Mobile ');
+    expect(repo.manageFilter).toHaveBeenCalledWith(ID, 'delete', 'Mobile', undefined);
+  });
+
+  it('checks parameters, groups, bins and blends', async () => {
+    const repo = fakeRepo();
+    await expect(addParameter(repo, ID, { name: 'Goal', id: '1bad' })).rejects.toThrow(
+      InvalidChartError,
+    );
+    await addParameter(repo, ID, { name: 'Goal', id: 'goal', dataType: 'Number (whole)' });
+    await expect(
+      addGroupField(repo, ID, { name: 'G', field: 'platform', groups: [] }),
+    ).rejects.toThrow(InvalidChartError);
+    await expect(addBinField(repo, ID, { name: 'B', field: 'ms', size: 0 })).rejects.toThrow(
+      InvalidChartError,
+    );
+    const tables = [
+      { dataSource: 'a', dimensions: ['uid'], metrics: [] },
+      { dataSource: 'b', dimensions: ['uid'], metrics: ['Record Count'] },
+    ];
+    await expect(createBlend(repo, ID, { name: 'AB', tables, joins: [] })).rejects.toThrow(
+      InvalidChartError,
+    );
+    await createBlend(repo, ID, {
+      name: 'AB',
+      tables,
+      joins: [{ type: 'inner', keys: [['uid', 'uid']] }],
+    });
+    expect(repo.createBlend).toHaveBeenCalled();
   });
 });

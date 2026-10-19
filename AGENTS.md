@@ -55,8 +55,22 @@ npm test             # vitest watch
 - The viewer clips pages taller than the window: `screenshot` grows the window through CDP first.
 - Text boxes ignore drags; move them with Shift+Arrow (1 px per press). A click on a selected text box enters text editing, so deselect first.
 - Date pickers (chart "Custom" range, date range control, comparison) open a popup with a preset menu button and Apply; presets like "Last 28 days" sit in a submenu named after its first entry ("Last 7 days").
-- Filters: Setup › Add filter lists the report's filters by name, then "Create a filter": name, Include/Exclude, field picker, condition `mat-select`, value chip inputs, Save.
+- Filters: Setup › Add filter lists the report's filters by name, then "Create a filter": name, Include/Exclude, field picker, condition `mat-select`, value box, Save. Each clause is a `.ng2-filter-expression-definition` with its own × button; the AND/OR buttons add the next clause last.
+- Filter values: with "Show suggested values while typing" on, "Equal to" and "In" take chips that only accept a suggested value (none while the data loads) and Save stays disabled. Turn it off: the box then takes free text, "In" comma separated.
+- `mat-select` labels intercept clicks: click with `force`. Option lists differ in case ("GREATER THAN" in conditional formatting): match ignoring case and the "(>)" suffix.
+- The filter editor and Manage filters have a field labelled "Name"; `getByLabel('Name')` also matches the report title. Use the placeholder "Filter name".
+- Resource › Manage filters: Remove asks "Remove Filter"; the page closes with CLOSE, not Escape.
+- "Add sort" opens the field picker directly and adds "Sort #2" with its own Descending/Ascending.
+- The "Chart types" grid lists presets in "Add a chart" order without labels: switch types by position.
 - Images and value-color dialogs ignore `fill()` on some inputs; type with the keyboard. A clicked image lands at 0×0: drag its box out.
 - Some settings (Layout › Navigation type) put the label in its own cell; `findField` falls back to the next cell with a control.
 - Making a component report-level puts it on top of every other component: a header band made report-level last covers its logo and title.
 - Sharing: Google refuses invitations from a headless browser and from a Send with several chips. One address per Send, in a visible window (`withPage(work, { visible: true })`). Changing an existing person's role closes the dialog.
+- A selected button opens a link menu over a transparent backdrop that ignores Escape and swallows the next click: `select` clicks the backdrop away first.
+- URL embeds are iframes: a click lands in the embedded page. Select them with a selection box dragged from the empty canvas. Inserted by a click they come in at 400x300; dragged out they stay at 6x6.
+- A new line keeps the drawing state: deselect before selecting it. Its "Line start"/"Line end" drop-downs have no label (values None, Circle, Diamond, Pointer).
+- Page › Current page settings only shows Filter and Date range dimension when the page has a chart with data.
+- Group fields: the "remaining values" name is a textarea under its checkbox. Bin fields: Bin Size / Bin min value / Bin max value.
+- Blends: the merge dialog pre-fills key pairs with the same field name; the join type buttons need a forced click.
+- Page visibility (Control visibility) is a dialog of three radios and Confirm.
+- When a repository call fails, a screenshot of the editor is saved as `error-<report>-<time>.png` in the screenshots folder.

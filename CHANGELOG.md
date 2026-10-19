@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Filters take several clauses (`clauses`: AND groups of OR clauses). Filter values are typed with the editor's suggestions off: with them on, a typed value that the editor could not suggest was dropped and the filter was saved empty.
+- `date_range` takes fixed dates (`2026-10-01..2026-10-15`).
+- Charts and `update_component` take `sorts` (Sort #2…), `reference_lines`, `reference_bands` and `conditional_formats`; pivots sort their first row dimension by `sort_by`.
+- `update_component` takes `chart_type` (switch a chart to another type), `button` and `embed_url`; `add_control` takes `button` (link to a URL or a page, or a report action).
+- New preset `scorecard_dimension`; `add_shape` draws block arrows and callouts.
+- New tools: `add_line`, `add_embed`, `duplicate_component`, `arrange_components`, `manage_page`, `set_page_settings` (page and report filters and dates), `manage_filter`, `add_parameter`, `add_group_field`, `add_bin_field`, `create_blend`.
+- `rename_page` renames the only page of a report (through a temporary second page).
+- Menus prefer an exact label: Insert › Line no longer opens "Line map".
 - `add_chart` covers all 48 chart presets of Looker Studio (pivot and table heatmaps, funnels, waterfalls, sankeys, bullets, histograms, timelines, maps…).
 - Charts, controls and `update_component` take `fields` (any Setup slot by heading: column dimension, sparkline, weight metric…), `filters` (new or existing), `date_range` presets, `comparison` periods, combo `series` (bars/line, left/right axis, color) and `value_colors`.
 - New tools: `add_control` (11 filter controls), `add_image` (local file or URL), `add_calculated_field`.

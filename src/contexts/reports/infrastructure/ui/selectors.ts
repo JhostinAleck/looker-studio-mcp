@@ -1,5 +1,9 @@
 import type { ChartType, ControlKind } from '@/contexts/reports/domain/Report.js';
-import type { ShapeKind } from '@/contexts/reports/domain/ReportRepository.js';
+import type {
+  ArrangeAction,
+  PageAction,
+  ShapeKind,
+} from '@/contexts/reports/domain/ReportRepository.js';
 
 // Every URL the editor opens carries hl=en, so these English labels hold for any account language.
 export const HL = 'hl=en';
@@ -13,6 +17,7 @@ export const CHART_PRESETS: Record<ChartType, string> = {
   table_heatmap: 'Table with heatmap',
   scorecard: 'Scorecard',
   scorecard_compact: 'Scorecard with compact numbers',
+  scorecard_dimension: 'Scorecard with dimension',
   time_series: 'Time series chart',
   smoothed_time_series: 'Smoothed time series chart',
   sparkline: 'Sparkline chart',
@@ -76,6 +81,7 @@ export const PANEL_TITLE_HINT: Record<ChartType, RegExp> = {
   table_heatmap: TABLE,
   scorecard: SCORECARD,
   scorecard_compact: SCORECARD,
+  scorecard_dimension: SCORECARD,
   time_series: TIME_SERIES,
   smoothed_time_series: TIME_SERIES,
   sparkline: TIME_SERIES,
@@ -221,18 +227,102 @@ export function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Insert › Shapes is a grid of icons without labels; each shape is known by its Material icon.
-export const SHAPE_ICONS: Record<ShapeKind, string> = {
-  rectangle: 'check_box_outline_blank',
-  circle: 'radio_button_unchecked',
-  triangle: 'change_history',
-  heart: 'favorite_border',
-  diamond: 'thermostat_carbon',
-  pentagon: 'pentagon',
-  star: 'star_border',
-  hexagon: 'hexagon',
-  octagon: 'octagon',
-  cylinder: 'cylinder',
+// Insert menu path of each shape. Shapes, Arrow and Callout are grids of
+// icons without labels; each shape is known by its Material icon.
+export const SHAPE_PATHS: Record<ShapeKind, string[]> = {
+  rectangle: ['Shapes', 'icon:check_box_outline_blank'],
+  circle: ['Shapes', 'icon:radio_button_unchecked'],
+  triangle: ['Shapes', 'icon:change_history'],
+  heart: ['Shapes', 'icon:favorite_border'],
+  diamond: ['Shapes', 'icon:thermostat_carbon'],
+  pentagon: ['Shapes', 'icon:pentagon'],
+  star: ['Shapes', 'icon:star_border'],
+  hexagon: ['Shapes', 'icon:hexagon'],
+  octagon: ['Shapes', 'icon:octagon'],
+  cylinder: ['Shapes', 'icon:cylinder'],
+  arrow_right: ['Arrow', 'icon:block_arrow_right'],
+  arrow_left: ['Arrow', 'icon:block_arrow_left'],
+  arrow_up: ['Arrow', 'icon:block_arrow_up'],
+  arrow_down: ['Arrow', 'icon:block_arrow_down'],
+  callout: ['Callout', 'icon:tooltip'],
+};
+
+// The "Chart types" grid of the properties panel lists the presets of "Add a
+// chart" in this order, without labels.
+export const PRESET_ORDER = [
+  'Table',
+  'Table with bars',
+  'Table with heatmap',
+  'Scorecard',
+  'Scorecard with compact numbers',
+  'Scorecard with dimension',
+  'Time series chart',
+  'Sparkline chart',
+  'Smoothed time series chart',
+  'Vertical bar chart',
+  'Stacked vertical bar chart',
+  '100% stacked vertical bar chart',
+  'Bar chart',
+  'Stacked bar chart',
+  '100% stacked bar chart',
+  'Histogram',
+  'Pie chart',
+  'Donut chart',
+  'Bubble map',
+  'Filled map',
+  'Heatmap',
+  'Line map',
+  'Connection map',
+  'Combo map',
+  'Geo chart',
+  'Combo chart',
+  'Stacked combo chart',
+  'Line chart',
+  'Smoothed line chart',
+  'Boxplot chart',
+  'Candlestick chart',
+  'Stacked area chart',
+  '100% stacked area chart',
+  'Area chart',
+  'Scatter chart',
+  'Bubble chart',
+  'Pivot table',
+  'Pivot table with bars',
+  'Pivot table with heatmap',
+  'Bullet chart',
+  'Treemap',
+  'Sankey',
+  'Gauge',
+  'Gauge with ranges',
+  'Waterfall',
+  'Timeline',
+  'Funnel chart smoothed bar',
+  'Funnel chart stepped bar',
+  'Funnel chart inverted triangle',
+];
+
+// Arrange menu path of each arrange action.
+export const ARRANGE_PATHS: Record<ArrangeAction, string[]> = {
+  align_left: ['Align horizontally', 'Left'],
+  align_center: ['Align horizontally', 'Center'],
+  align_right: ['Align horizontally', 'Right'],
+  align_top: ['Align vertically', 'Top'],
+  align_middle: ['Align vertically', 'Middle'],
+  align_bottom: ['Align vertically', 'Bottom'],
+  distribute_horizontally: ['Distribute', 'Horizontally'],
+  distribute_vertically: ['Distribute', 'Vertically'],
+  group: ['Group'],
+  ungroup: ['Ungroup'],
+};
+
+// Item of a page's menu in Page › Manage pages.
+export const PAGE_MENU: Record<Exclude<PageAction, 'hide' | 'show'>, string> = {
+  delete: 'Delete',
+  duplicate: 'Duplicate',
+  move_up: 'Move up',
+  move_down: 'Move down',
+  move_top: 'Move to top',
+  move_bottom: 'Move to bottom',
 };
 
 export const SEL = {

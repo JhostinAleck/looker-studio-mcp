@@ -124,6 +124,25 @@ For a light report: theme `Simple`, background `#F6F7FB`, cards `#FFFFFF` with `
  "filters": [{"name": "Android only", "field": "platform", "condition": "equals", "values": ["android"]}]}
 ```
 
+**Targets and alerts**: a reference line on the trend and red cells when a value crosses it
+
+```json
+{"tool": "add_chart", "type": "line", "dimensions": ["occurred_on"], "metrics": [{"field": "Record Count"}],
+ "reference_lines": [{"value": 50, "label": "Goal", "color": "#C62828"}],
+ "reference_bands": [{"from": 30, "to": 50, "color": "#FFF3E0"}]}
+{"tool": "add_chart", "type": "table", "dimensions": ["feature_label"], "metrics": [{"field": "Record Count"}],
+ "conditional_formats": [{"rules": [[{"field": "Record Count", "condition": "lt", "value": "10"}]],
+                          "background_color": "#FFEBEE", "font_color": "#B71C1C"}]}
+```
+
+**One filter for the whole page** instead of one per chart:
+
+```json
+{"tool": "set_page_settings", "scope": "page", "page": 1, "date_range_dimension": "occurred_on",
+ "date_range": "Last 28 days",
+ "filters": [{"name": "Mobile", "clauses": [[{"field": "platform", "condition": "in", "values": ["android", "ios"]}]]}]}
+```
+
 **Tabs between pages**: `set_theme` with `"layout": {"Navigation type": "Tab"}`.
 
 ## Finding the right setting

@@ -1,5 +1,5 @@
 import { updateComponent } from '@/contexts/reports/application/reportUseCases.js';
-import { toDataSettings, updateComponentSchema } from '@/mcp/schemas.js';
+import { toButton, toDataSettings, updateComponentSchema } from '@/mcp/schemas.js';
 import { runWrite, text, type ToolResult, type WriteDeps } from '@/mcp/tool-helpers.js';
 
 import { formatComponent, toLayout } from './component-format.js';
@@ -17,6 +17,9 @@ export async function handleUpdateComponent(
     ...(input.labels ? { labels: input.labels } : {}),
     ...(input.order ? { order: input.order } : {}),
     ...(input.report_level !== undefined ? { reportLevel: input.report_level } : {}),
+    ...(input.chart_type ? { chartType: input.chart_type } : {}),
+    ...(input.button ? { button: toButton(input.button) } : {}),
+    ...(input.embed_url ? { embedUrl: input.embed_url } : {}),
     ...toDataSettings(input),
   };
   return runWrite(

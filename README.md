@@ -106,17 +106,25 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `create_report` | New report connected to a BigQuery table or view |
 | `add_data_source` | Connect another BigQuery table to a report |
 | `refresh_data_source` | Re-read a data source's fields after a column was added to the table or view |
-| `add_chart` | All 48 chart presets: tables (with bars/heatmap), scorecards (compact, sparkline), time series, bars (stacked, 100%), histogram, pie, donut, line, area, combo, pivot tables (with bars/heatmap), funnel, waterfall, sankey, bullet, gauge, treemap, scatter, bubble, boxplot, candlestick, timeline, geo and Google Maps — with dimensions, metrics (aggregation, display name), breakdown, sort, extra Setup slots, filters, default date range, comparison period, combo series, value colors, title, layout and Style settings |
-| `add_control` | Drop-down, fixed-size list, input box, advanced filter, slider, checkbox, preset filter, date range, data control, dimension control, button |
+| `add_chart` | All 49 chart presets: tables (with bars/heatmap), scorecards (compact, with dimension, sparkline), time series, bars (stacked, 100%), histogram, pie, donut, line, area, combo, pivot tables (with bars/heatmap), funnel, waterfall, sankey, bullet, gauge, treemap, scatter, bubble, boxplot, candlestick, timeline, geo and Google Maps — with dimensions, metrics (aggregation, display name), breakdown, sorts (Sort #2…), extra Setup slots, filters (AND/OR), default date range (preset or fixed dates), comparison period, combo series, value colors, reference lines and bands, conditional formatting, title, layout and Style settings |
+| `add_control` | Drop-down, fixed-size list, input box, advanced filter, slider, checkbox, preset filter, date range, data control, dimension control, button (link to a URL or page, or a report action) |
 | `add_image` | Logo or header art from a local file or https URL |
 | `add_calculated_field` | A formula field on a data source (ratios, CASE groupings, date parts) |
 | `add_text` | Text box: size, color, bold, alignment, background |
-| `add_shape` | Rectangle, circle, triangle, heart, diamond, pentagon, star, hexagon, octagon, cylinder: fill, border, radius |
-| `update_component` | Move/resize, Style/Setup settings, Setup slots, filters, date range, comparison, series, value colors, rename fields, restack (front/back), make report-level |
+| `add_shape` | Rectangle, circle, triangle, heart, diamond, pentagon, star, hexagon, octagon, cylinder, block arrows, callout: fill, border, radius |
+| `add_line` | Straight line between two points: color, dash style, arrow heads |
+| `add_embed` | URL embed (a page that allows being embedded) |
+| `update_component` | Move/resize, switch the chart type, Style/Setup settings, Setup slots, filters, sorts, reference lines/bands, conditional formatting, date range, comparison, series, value colors, rename fields, restack (front/back), make report-level, button action, embed URL |
+| `duplicate_component` | Copy a component with its settings and place the copy |
+| `arrange_components` | Align, distribute evenly, group or ungroup components |
 | `delete_component` | Remove a component |
+| `set_page_settings` | Filters, default date range, date range dimension and data source of a whole page or of the whole report; page background and size |
+| `manage_filter` | Edit (rename, replace clauses), duplicate or delete a filter of the report |
+| `add_parameter`, `add_group_field`, `add_bin_field` | Parameters (with permitted values and default), group fields (named buckets) and bin fields (numeric ranges) |
+| `create_blend` | Blend 2 to 5 data sources with left/right/inner/full/cross joins |
 | `set_theme` | Built-in theme, custom theme settings, page size, Layout settings (tab navigation, header) |
 | `share_report` | Invite several people at once as viewers or editors; existing access is changed in place |
-| `add_page`, `rename_page`, `rename_report`, `delete_report` | Report management |
+| `add_page`, `rename_page`, `manage_page`, `rename_report`, `delete_report` | Report management; `manage_page` deletes, duplicates, hides/shows and reorders pages |
 
 Settings are addressed by the **label the properties panel shows** (`"Bar color"`, `"Show data labels"`, `"Border radius"`…). `describe_component` lists them; settings that do not exist come back as warnings instead of failing silently.
 
@@ -146,6 +154,9 @@ See [docs/design-guide.md](docs/design-guide.md) for the canvas grid, the card p
 - Time series need a date or date-time dimension with a sensible granularity; a raw timestamp gives "Too many rows". Add a `DATE(...)` column in a view.
 - Field chips are matched by their display name, so rename fields (`labels`) after the setup that refers to them.
 - `add_page` appends after the last page.
+- `manage_filter` edit rewrites every clause of the filter; charts that use it keep it.
+- Filter values are typed as free text (the editor's value suggestions are turned off), so a value that is not in the data is accepted: check the spelling. "In" takes its values comma separated.
+- Community visualizations are not covered: they need a third-party component URL and its own permission prompt.
 - `share_report` opens a visible Chrome window for a few seconds: Google refuses invitations sent from a headless browser. It sends one invitation per address, since a batch fails with "An unknown error occurred".
 
 ## Architecture

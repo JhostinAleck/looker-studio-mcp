@@ -18,6 +18,7 @@ export const CHART_TYPES = [
   'table_heatmap',
   'scorecard',
   'scorecard_compact',
+  'scorecard_dimension',
   'time_series',
   'smoothed_time_series',
   'sparkline',
@@ -83,16 +84,75 @@ export interface MetricSpec {
   label?: string;
 }
 
-// A filter clause: `field` `condition` `values`, kept (include) or dropped.
-// With only `name`, an existing filter of the report is reused.
+// One condition: `field` `condition` `values`, kept (include) or dropped.
+export interface FilterClause {
+  field: string;
+  // The label of the editor's condition list ("Equal to (=)", "Contains",
+  // "In", "Greater than (>)"…) or a short alias: equals, contains, in, gt, lt…
+  condition: string;
+  values?: string[];
+  exclude?: boolean;
+}
+
+// A named filter. One clause through `field`/`condition`/`values`/`exclude`,
+// or several through `clauses`: groups joined by AND, clauses inside a group
+// joined by OR. With only `name`, an existing filter of the report is reused.
 export interface FilterSpec {
   name: string;
   field?: string;
-  // The label of the filter editor's condition list ("Equal to (=)", "Contains",
-  // "In", "Greater than (>)"…) or a short alias: equals, contains, in, gt, lt…
   condition?: string;
   values?: string[];
   exclude?: boolean;
+  clauses?: FilterClause[][];
+}
+
+// The clauses of a filter, as AND groups of OR clauses.
+export function filterClauses(filter: FilterSpec): FilterClause[][] {
+  if (filter.clauses?.length) return filter.clauses;
+  if (!filter.field || !filter.condition) return [];
+  return [
+    [
+      {
+        field: filter.field,
+        condition: filter.condition,
+        ...(filter.values ? { values: filter.values } : {}),
+        ...(filter.exclude ? { exclude: true } : {}),
+      },
+    ],
+  ];
+}
+
+export interface SortSpec {
+  field: string;
+  ascending?: boolean;
+}
+
+// A horizontal (or vertical) line at a value, e.g. a target.
+export interface ReferenceLine {
+  value?: number;
+  label?: string;
+  color?: string;
+  // "Constant value" (default), "Metric", "Parameter"… as the editor lists them.
+  type?: string;
+  // "Left Y-axis", "Right Y-axis", "Bottom X-axis"… as the editor lists them.
+  axis?: string;
+}
+
+// A shaded band between two values, e.g. an acceptable range.
+export interface ReferenceBand {
+  from: number;
+  to: number;
+  label?: string;
+  color?: string;
+}
+
+// Colors cells, rows or a scorecard when its rules match (AND groups of OR rules).
+export interface ConditionalFormat {
+  rules: Array<Array<{ field: string; condition: string; value?: string }>>;
+  // "Entire row" or a column of the table; scorecards ignore it.
+  applyTo?: string;
+  fontColor?: string;
+  backgroundColor?: string;
 }
 
 // How a metric of a combo/line chart is drawn.
@@ -115,7 +175,15 @@ export interface DataSettings {
   series?: SeriesSpec[];
   // Fixed colors per dimension value (pie slices, bars…): {"android": "#7C4DFF"}.
   valueColors?: Record<string, string>;
+  // Tables: sorts after the first one ("Sort #2", "Sort #3"…).
+  sorts?: SortSpec[];
+  referenceLines?: ReferenceLine[];
+  referenceBands?: ReferenceBand[];
+  conditionalFormats?: ConditionalFormat[];
 }
+
+// A fixed date range: "2026-10-01..2026-10-15".
+export const FIXED_RANGE_RE = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/;
 
 export interface ChartSpec extends DataSettings {
   type: ChartType;
@@ -144,12 +212,24 @@ export const CONTROL_KINDS = [
 ] as const;
 export type ControlKind = (typeof CONTROL_KINDS)[number];
 
+export interface ButtonSpec {
+  // "link" opens `url` or the page named `page`; "report_action" runs one of
+  // Invite people, Get report link, Download report, Reset filters.
+  action: 'link' | 'report_action';
+  url?: string;
+  page?: string;
+  newTab?: boolean;
+  reportAction?: 'Invite people' | 'Get report link' | 'Download report' | 'Reset filters';
+  label?: string;
+}
+
 export interface ControlSpec extends DataSettings {
   kind: ControlKind;
   // The dimension the control filters by ("Control field").
   field?: string;
   // Drop-downs and lists can show a metric next to each value.
   metric?: string;
+  button?: ButtonSpec;
 }
 
 // Position and size in report pixels (the canvas is 1200×900 unless changed).
@@ -246,6 +326,8 @@ const SHAPES: Record<ChartType, ChartShape> = {
   table_heatmap: TABULAR,
   scorecard: SINGLE_VALUE,
   scorecard_compact: SINGLE_VALUE,
+  // Shows the top value of one dimension; sort_by picks the metric that ranks it.
+  scorecard_dimension: { dimensions: ONE, metrics: [0, 0] },
   time_series: SERIES,
   smoothed_time_series: SERIES,
   sparkline: SERIES,
@@ -335,15 +417,7 @@ export function validateDataSettings(data: DataSettings): DataSettings {
       throw new InvalidChartError(`Field names for "${section}" cannot be empty.`);
     }
   }
-  for (const filter of data.filters ?? []) {
-    if (!filter.name.trim()) throw new InvalidChartError('Every filter needs a name.');
-    if (filter.field !== undefined && !filter.condition) {
-      throw new InvalidChartError(`Filter "${filter.name}" has a field but no condition.`);
-    }
-    if (filter.field === undefined && (filter.condition || filter.values?.length)) {
-      throw new InvalidChartError(`Filter "${filter.name}" has a condition but no field.`);
-    }
-  }
+  for (const filter of data.filters ?? []) validateFilter(filter);
   for (const series of data.series ?? []) {
     if (!series.metric.trim()) throw new InvalidChartError('Every series needs its metric.');
     if (series.color !== undefined && !HEX_COLOR_RE.test(series.color)) {
@@ -355,14 +429,87 @@ export function validateDataSettings(data: DataSettings): DataSettings {
       throw new InvalidChartError(`Color "${color}" for "${value}" is not a #RRGGBB color.`);
     }
   }
-  if (data.dateRange !== undefined && !data.dateRange.trim()) {
-    throw new InvalidChartError('date_range cannot be empty.');
+  if (data.dateRange !== undefined) validateDateRange(data.dateRange);
+  for (const sort of data.sorts ?? []) {
+    if (!sort.field.trim()) throw new InvalidChartError('Every sort needs its field.');
+  }
+  for (const line of data.referenceLines ?? []) checkColor('reference line color', line.color);
+  for (const band of data.referenceBands ?? []) {
+    checkColor('reference band color', band.color);
+    if (!(band.from < band.to)) {
+      throw new InvalidChartError(
+        `A reference band needs from < to (got ${band.from}..${band.to}).`,
+      );
+    }
+  }
+  for (const format of data.conditionalFormats ?? []) {
+    if (!format.rules.length || format.rules.some((g) => !g.length)) {
+      throw new InvalidChartError('A conditional format needs at least one rule in every group.');
+    }
+    if (!format.fontColor && !format.backgroundColor) {
+      throw new InvalidChartError('A conditional format needs font_color or background_color.');
+    }
+    checkColor('font_color', format.fontColor);
+    checkColor('background_color', format.backgroundColor);
   }
   return data;
 }
 
+function checkColor(label: string, value: string | undefined): void {
+  if (value !== undefined && !HEX_COLOR_RE.test(value)) {
+    throw new InvalidChartError(`${label} "${value}" is not a #RRGGBB color.`);
+  }
+}
+
+export function validateFilter(filter: FilterSpec): FilterSpec {
+  if (!filter.name.trim()) throw new InvalidChartError('Every filter needs a name.');
+  if (filter.field !== undefined && !filter.condition) {
+    throw new InvalidChartError(`Filter "${filter.name}" has a field but no condition.`);
+  }
+  if (filter.field === undefined && (filter.condition || filter.values?.length)) {
+    throw new InvalidChartError(`Filter "${filter.name}" has a condition but no field.`);
+  }
+  if (filter.clauses && filter.field) {
+    throw new InvalidChartError(
+      `Filter "${filter.name}": pass field/condition or clauses, not both.`,
+    );
+  }
+  for (const group of filter.clauses ?? []) {
+    if (!group.length) throw new InvalidChartError(`Filter "${filter.name}" has an empty group.`);
+    for (const c of group) {
+      if (!c.field.trim() || !c.condition.trim()) {
+        throw new InvalidChartError(
+          `Every clause of "${filter.name}" needs a field and a condition.`,
+        );
+      }
+    }
+  }
+  return filter;
+}
+
+export function validateDateRange(range: string): string {
+  if (!range.trim()) throw new InvalidChartError('date_range cannot be empty.');
+  const fixed = FIXED_RANGE_RE.exec(range.trim());
+  if (fixed) {
+    const [from, to] = [fixed[1]!, fixed[2]!];
+    if (Number.isNaN(Date.parse(from)) || Number.isNaN(Date.parse(to)) || from > to) {
+      throw new InvalidChartError(`"${range}" is not a valid YYYY-MM-DD..YYYY-MM-DD range.`);
+    }
+  }
+  return range;
+}
+
 export function validateControl(spec: ControlSpec): ControlSpec {
   const fieldless: ControlKind[] = ['date_range', 'data_control', 'button', 'preset_filter'];
+  if (spec.button && spec.kind !== 'button') {
+    throw new InvalidChartError('Only a button control takes `button` settings.');
+  }
+  if (spec.button?.action === 'link' && !spec.button.url && !spec.button.page) {
+    throw new InvalidChartError('A link button needs a url or a page.');
+  }
+  if (spec.button?.action === 'report_action' && !spec.button.reportAction) {
+    throw new InvalidChartError('A report_action button needs report_action.');
+  }
   if (!fieldless.includes(spec.kind) && !spec.field?.trim()) {
     throw new InvalidChartError(`A ${spec.kind} control needs the field it filters by.`);
   }

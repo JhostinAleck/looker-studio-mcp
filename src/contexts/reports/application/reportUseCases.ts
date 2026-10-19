@@ -1,10 +1,18 @@
 import type {
+  ArrangeAction,
+  BinFieldSpec,
+  BlendSpec,
   CalculatedFieldSpec,
   ComponentChange,
+  GroupFieldSpec,
   ImageSpec,
+  LineSpec,
+  PageAction,
+  ParameterSpec,
   PlaceOptions,
   ReportPage,
   ReportRepository,
+  ScopeSettings,
   ShapeSpec,
   TextSpec,
   ThemeSpec,
@@ -15,6 +23,8 @@ import {
   type ComponentDetails,
   type ComponentInfo,
   type ControlSpec,
+  type FilterSpec,
+  type Layout,
   type ReportSummary,
   type StyleSettings,
   HEX_COLOR_RE,
@@ -23,6 +33,8 @@ import {
   validateChart,
   validateControl,
   validateDataSettings,
+  validateDateRange,
+  validateFilter,
   validateLayout,
   validateSettings,
 } from '@/contexts/reports/domain/Report.js';
@@ -207,7 +219,13 @@ export async function updateComponent(
     !!change.dateRange ||
     !!change.comparison ||
     (change.series?.length ?? 0) > 0 ||
-    Object.keys(change.valueColors ?? {}).length > 0;
+    Object.keys(change.valueColors ?? {}).length > 0 ||
+    (change.sorts?.length ?? 0) > 0 ||
+    (change.referenceLines?.length ?? 0) > 0 ||
+    (change.referenceBands?.length ?? 0) > 0 ||
+    (change.conditionalFormats?.length ?? 0) > 0;
+  if (change.button) validateControl({ kind: 'button', button: change.button });
+  if (change.embedUrl !== undefined) checkUrl(change.embedUrl);
   if (
     !change.layout &&
     !change.style &&
@@ -215,13 +233,183 @@ export async function updateComponent(
     !change.order &&
     change.reportLevel === undefined &&
     labels.length === 0 &&
+    !change.chartType &&
+    !change.button &&
+    change.embedUrl === undefined &&
     !data
   ) {
     throw new InvalidChartError(
-      'Nothing to change: pass layout, style, setup, labels, order, report_level or a data setting (fields, filters, date_range, comparison, series, value_colors).',
+      'Nothing to change: pass layout, style, setup, labels, order, report_level, chart_type, button, embed_url or a data setting (fields, filters, date_range, comparison, series, value_colors, sorts, reference_lines, reference_bands, conditional_formats).',
     );
   }
   return repo.updateComponent(parseReportId(report), index, change, page);
+}
+
+function checkUrl(url: string): void {
+  if (!/^https?:\/\/\S+$/i.test(url.trim())) {
+    throw new InvalidChartError(`"${url}" is not an http(s) URL.`);
+  }
+}
+
+export async function addLine(
+  repo: ReportRepository,
+  report: string,
+  line: LineSpec,
+  opts: { page?: number; style?: StyleSettings } = {},
+): Promise<ComponentInfo> {
+  for (const p of [line.from, line.to]) {
+    if (p.x < 0 || p.y < 0) throw new InvalidChartError('Line ends must be inside the canvas.');
+  }
+  if (line.from.x === line.to.x && line.from.y === line.to.y) {
+    throw new InvalidChartError('A line needs two different ends.');
+  }
+  checkColor('color', line.color);
+  if (opts.style) validateSettings(opts.style);
+  return repo.addLine(parseReportId(report), line, opts);
+}
+
+export async function addEmbed(
+  repo: ReportRepository,
+  report: string,
+  url: string,
+  opts: StyledPlace = {},
+): Promise<ComponentInfo> {
+  checkUrl(url);
+  return repo.addEmbed(parseReportId(report), url.trim(), checkPlace(opts));
+}
+
+export async function duplicateComponent(
+  repo: ReportRepository,
+  report: string,
+  index: number,
+  layout?: Partial<Layout>,
+  page?: number,
+): Promise<ComponentInfo> {
+  if (layout) validateLayout(layout);
+  return repo.duplicateComponent(parseReportId(report), index, layout, page);
+}
+
+export async function arrangeComponents(
+  repo: ReportRepository,
+  report: string,
+  indexes: number[],
+  action: ArrangeAction,
+  page?: number,
+): Promise<ComponentInfo[]> {
+  const unique = [...new Set(indexes)];
+  const min = action.startsWith('distribute') ? 3 : action === 'ungroup' ? 1 : 2;
+  if (unique.length < min) {
+    throw new InvalidChartError(`${action} needs at least ${min} different components.`);
+  }
+  return repo.arrangeComponents(parseReportId(report), unique, action, page);
+}
+
+export async function managePage(
+  repo: ReportRepository,
+  report: string,
+  page: number,
+  action: PageAction,
+): Promise<ReportPage[]> {
+  if (!Number.isInteger(page) || page < 1) throw new InvalidChartError('page is 1-based.');
+  return repo.managePage(parseReportId(report), page, action);
+}
+
+export async function setScopeSettings(
+  repo: ReportRepository,
+  report: string,
+  scope: 'page' | 'report',
+  settings: ScopeSettings,
+  page?: number,
+): Promise<string[]> {
+  for (const filter of settings.filters ?? []) validateFilter(filter);
+  if (settings.dateRange !== undefined) validateDateRange(settings.dateRange);
+  if (settings.style) validateSettings(settings.style);
+  if (Object.values(settings).every((v) => v === undefined || (Array.isArray(v) && !v.length))) {
+    throw new InvalidChartError(
+      'Nothing to set: pass data_source, filters, date_range_dimension, date_range or style.',
+    );
+  }
+  return repo.setScopeSettings(parseReportId(report), scope, settings, page);
+}
+
+export async function manageFilter(
+  repo: ReportRepository,
+  report: string,
+  action: 'edit' | 'duplicate' | 'delete',
+  name: string,
+  filter?: FilterSpec,
+): Promise<void> {
+  if (!name.trim()) throw new InvalidChartError('Name the filter.');
+  if (action === 'edit') {
+    if (!filter) throw new InvalidChartError('An edit needs the new clauses or name.');
+    validateFilter(filter);
+  }
+  return repo.manageFilter(parseReportId(report), action, name.trim(), filter);
+}
+
+export async function addParameter(
+  repo: ReportRepository,
+  report: string,
+  parameter: ParameterSpec,
+  dataSource?: string,
+): Promise<void> {
+  if (!parameter.name.trim()) throw new InvalidChartError('The parameter needs a name.');
+  if (parameter.id !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(parameter.id)) {
+    throw new InvalidChartError('The parameter id takes letters, digits and _ only.');
+  }
+  return repo.addParameter(parseReportId(report), parameter, dataSource?.trim() || undefined);
+}
+
+export async function addGroupField(
+  repo: ReportRepository,
+  report: string,
+  group: GroupFieldSpec,
+  dataSource?: string,
+): Promise<void> {
+  if (!group.name.trim() || !group.field.trim())
+    throw new InvalidChartError('The group field needs a name and the field it groups.');
+  if (!group.groups.length) throw new InvalidChartError('Define at least one group.');
+  for (const g of group.groups) {
+    if (!g.name.trim()) throw new InvalidChartError('Every group needs a name.');
+    if (!g.values.length && !/null|blank|any/i.test(g.condition))
+      throw new InvalidChartError(`Group "${g.name}" needs values.`);
+  }
+  return repo.addGroupField(parseReportId(report), group, dataSource?.trim() || undefined);
+}
+
+export async function addBinField(
+  repo: ReportRepository,
+  report: string,
+  bin: BinFieldSpec,
+  dataSource?: string,
+): Promise<void> {
+  if (!bin.name.trim() || !bin.field.trim())
+    throw new InvalidChartError('The bin field needs a name and the numeric field it bins.');
+  if (!(bin.size > 0)) throw new InvalidChartError('The bin size must be positive.');
+  if (bin.min !== undefined && bin.max !== undefined && bin.min >= bin.max)
+    throw new InvalidChartError('min must be below max.');
+  return repo.addBinField(parseReportId(report), bin, dataSource?.trim() || undefined);
+}
+
+export async function createBlend(
+  repo: ReportRepository,
+  report: string,
+  blend: BlendSpec,
+): Promise<void> {
+  if (!blend.name.trim()) throw new InvalidChartError('The blend needs a name.');
+  if (blend.tables.length < 2 || blend.tables.length > 5)
+    throw new InvalidChartError('A blend joins 2 to 5 tables.');
+  if (blend.joins.length !== blend.tables.length - 1)
+    throw new InvalidChartError('Give one join per table after the first.');
+  for (const [i, join] of blend.joins.entries()) {
+    if (join.type !== 'cross' && !join.keys.length)
+      throw new InvalidChartError(`Join ${i + 1} needs at least one pair of key fields.`);
+  }
+  for (const t of blend.tables) {
+    if (!t.dimensions.length && !t.metrics.length)
+      throw new InvalidChartError(`Table ${t.dataSource} needs a dimension or a metric.`);
+  }
+  return repo.createBlend(parseReportId(report), blend);
 }
 
 export async function deleteComponent(

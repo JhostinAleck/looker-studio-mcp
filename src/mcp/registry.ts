@@ -5,6 +5,17 @@ import * as schemas from './schemas.js';
 import { errorResult, type ToolResult, type WriteDeps } from './tool-helpers.js';
 import type { BigQueryToolDeps } from './tools/bigquery-deps.js';
 import type { ReportToolDeps } from './tools/reports-deps.js';
+import { handleAddLine } from './tools/add-line.tool.js';
+import { handleAddEmbed } from './tools/add-embed.tool.js';
+import { handleDuplicateComponent } from './tools/duplicate-component.tool.js';
+import { handleArrangeComponents } from './tools/arrange-components.tool.js';
+import { handleManagePage } from './tools/manage-page.tool.js';
+import { handleSetPageSettings } from './tools/set-page-settings.tool.js';
+import { handleManageFilter } from './tools/manage-filter.tool.js';
+import { handleAddParameter } from './tools/add-parameter.tool.js';
+import { handleAddGroupField } from './tools/add-group-field.tool.js';
+import { handleAddBinField } from './tools/add-bin-field.tool.js';
+import { handleCreateBlend } from './tools/create-blend.tool.js';
 import { handleAddCalculatedField } from './tools/add-calculated-field.tool.js';
 import { handleAddChart } from './tools/add-chart.tool.js';
 import { handleAddControl } from './tools/add-control.tool.js';
@@ -188,7 +199,7 @@ const TOOLS: ToolDef[] = [
     name: 'add_chart',
     title: 'Add a chart',
     description:
-      'Add any of the 48 Looker Studio charts (tables with bars/heatmap, scorecards, time series, bars, pies, combos, pivot heatmaps, funnels, waterfalls, sankeys, bullets, maps, …) with dimensions, metrics (aggregation, display name), breakdown, sort, extra Setup slots, filters, default date range, comparison, combo series and value colors, at an exact layout and with Style settings.\nUse "Record Count" to count rows. Check the result with screenshot_report.',
+      'Add any of the 49 Looker Studio charts (tables with bars/heatmap, scorecards (compact, with dimension), time series, bars, pies, combos, pivot heatmaps, funnels, waterfalls, sankeys, bullets, maps, …) with dimensions, metrics (aggregation, display name), breakdown, sorts, extra Setup slots, filters (AND/OR), default date range (preset or fixed dates), comparison, combo series, value colors, reference lines and bands and conditional formatting, at an exact layout and with Style settings.\nUse "Record Count" to count rows. Check the result with screenshot_report.',
     schema: schemas.addChartSchema,
     write: true,
     run: handleAddChart,
@@ -206,7 +217,7 @@ const TOOLS: ToolDef[] = [
     name: 'add_shape',
     title: 'Add a shape',
     description:
-      'Add a shape (rectangle, circle, triangle, star, …) with fill, border and corner radius. Rectangles behind charts make cards and header bands.\nShapes go on top: send them back with update_component order "back".',
+      'Add a shape (rectangle, circle, triangle, star, arrows, callout, …) with fill, border and corner radius. Rectangles behind charts make cards and header bands.\nShapes go on top: send them back with update_component order "back".',
     schema: schemas.addShapeSchema,
     write: true,
     run: handleAddShape,
@@ -215,7 +226,7 @@ const TOOLS: ToolDef[] = [
     name: 'add_control',
     title: 'Add a filter control',
     description:
-      'Add a control viewers filter the page with: drop-down list, fixed-size list, input box, advanced filter, slider, checkbox, preset filter, date range control, data control, dimension control or button.\nControls filter every chart on the page that uses the same data source.',
+      'Add a control viewers filter the page with: drop-down list, fixed-size list, input box, advanced filter, slider, checkbox, preset filter, date range control, data control, dimension control or button (link to a URL or page, or a report action).\nControls filter every chart on the page that uses the same data source.',
     schema: schemas.addControlSchema,
     write: true,
     run: handleAddControl,
@@ -242,10 +253,108 @@ const TOOLS: ToolDef[] = [
     name: 'update_component',
     title: 'Update a component',
     description:
-      'Move or resize a component, change its Style/Setup settings, fill Setup slots, add filters, set its date range or comparison, style combo series, color dimension values, rename its fields, restack it (front/back) or make it report-level.',
+      'Move or resize a component, switch a chart to another type, change its Style/Setup settings, fill Setup slots, add filters, sorts, reference lines/bands or conditional formatting, set its date range or comparison, style combo series, color dimension values, rename its fields, restack it (front/back), make it report-level, set what a button does or the URL of an embed.',
     schema: schemas.updateComponentSchema,
     write: true,
     run: handleUpdateComponent,
+  },
+  {
+    name: 'add_line',
+    title: 'Add a line',
+    description:
+      'Draw a straight line (divider, connector, arrow) between two points of the canvas, with color, dash style and arrow heads.',
+    schema: schemas.addLineSchema,
+    write: true,
+    run: handleAddLine,
+  },
+  {
+    name: 'add_embed',
+    title: 'Embed a web page',
+    description:
+      'Add a URL embed showing a web page (a form, a doc, a video) inside the report. The page must allow being embedded.',
+    schema: schemas.addEmbedSchema,
+    write: true,
+    run: handleAddEmbed,
+  },
+  {
+    name: 'duplicate_component',
+    title: 'Duplicate a component',
+    description:
+      'Copy a chart, control, text or shape (Edit › Duplicate) with all its settings, and place the copy.',
+    schema: schemas.duplicateComponentSchema,
+    write: true,
+    run: handleDuplicateComponent,
+  },
+  {
+    name: 'arrange_components',
+    title: 'Align, distribute or group',
+    description:
+      'Align components (left, center, right, top, middle, bottom), space them evenly (distribute) or group/ungroup them, like Arrange in the editor.',
+    schema: schemas.arrangeComponentsSchema,
+    write: true,
+    run: handleArrangeComponents,
+  },
+  {
+    name: 'manage_page',
+    title: 'Manage a page',
+    description: 'Delete, duplicate, hide/show (in view mode) or reorder a page of a report.',
+    schema: schemas.managePageSchema,
+    write: true,
+    run: handleManagePage,
+  },
+  {
+    name: 'set_page_settings',
+    title: 'Page or report filters and dates',
+    description:
+      'Set filters, the default date range, the date range dimension and the default data source for a whole page (Current page settings) or the whole report (Report settings). Page scope also takes Style settings such as the page background.',
+    schema: schemas.setPageSettingsSchema,
+    write: true,
+    run: handleSetPageSettings,
+  },
+  {
+    name: 'manage_filter',
+    title: 'Edit, copy or delete a filter',
+    description:
+      'Edit (rename and replace the clauses of), duplicate or delete a filter of the report, as Resource › Manage filters lists them. Charts using the filter keep it.',
+    schema: schemas.manageFilterSchema,
+    write: true,
+    run: handleManageFilter,
+  },
+  {
+    name: 'add_parameter',
+    title: 'Add a parameter',
+    description:
+      'Add a parameter (text, number or boolean, with permitted values and a default) that calculated fields can read and viewers can change with a control.',
+    schema: schemas.addParameterSchema,
+    write: true,
+    run: handleAddParameter,
+  },
+  {
+    name: 'add_group_field',
+    title: 'Add a group field',
+    description:
+      'Add a field that groups the values of another field into named buckets (Add a field › Add group), with an optional bucket for everything else.',
+    schema: schemas.addGroupFieldSchema,
+    write: true,
+    run: handleAddGroupField,
+  },
+  {
+    name: 'add_bin_field',
+    title: 'Add a bin field',
+    description:
+      'Add a field that bins a numeric field into equal ranges (Add a field › Add bin), e.g. response times by 100 ms.',
+    schema: schemas.addBinFieldSchema,
+    write: true,
+    run: handleAddBinField,
+  },
+  {
+    name: 'create_blend',
+    title: 'Blend data sources',
+    description:
+      'Blend 2 to 5 data sources of the report into one (Resource › Manage blends): pick the dimensions and metrics of each table and how it joins the tables to its left. Charts then use the blend as their data source.',
+    schema: schemas.createBlendSchema,
+    write: true,
+    run: handleCreateBlend,
   },
   {
     name: 'delete_component',

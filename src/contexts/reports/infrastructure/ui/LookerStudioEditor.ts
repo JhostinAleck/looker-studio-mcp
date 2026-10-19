@@ -2,11 +2,18 @@ import type { Locator, Page } from 'playwright';
 
 import type {
   BigQuerySource,
+  ButtonSpec,
+  ConditionalFormat,
+  FilterClause,
   Layout,
+  ReferenceBand,
+  ReferenceLine,
   SettingInfo,
   StyleSettings,
 } from '@/contexts/reports/domain/Report.js';
-import { HEX_COLOR_RE } from '@/contexts/reports/domain/Report.js';
+import { FIXED_RANGE_RE, HEX_COLOR_RE } from '@/contexts/reports/domain/Report.js';
+
+type FilterClauseInput = FilterClause;
 import { InfrastructureError } from '@/shared-kernel/errors/InfrastructureError.js';
 
 import { BASE, HL, SECTION, SEL, cssEscape, datePresetPath, escapeRegExp } from './selectors.js';
@@ -183,13 +190,15 @@ export class LookerStudioEditor {
           if (!root) return null;
           // "icon:<name>" picks an icon-only item (the Shapes grid) by its Material icon.
           const icon = text.startsWith('icon:') ? text.slice(5) : null;
-          const el = [...root.querySelectorAll<HTMLElement>('[role=menuitem]')].find(
-            (e) =>
-              e.offsetParent !== null &&
-              (icon
-                ? e.querySelector(`mat-icon[data-mat-icon-name="${icon}"]`) !== null
-                : e.innerText.trim().split('\n')[0]!.trim().startsWith(text)),
+          const items = [...root.querySelectorAll<HTMLElement>('[role=menuitem]')].filter(
+            (e) => e.offsetParent !== null,
           );
+          const label = (e: HTMLElement) => e.innerText.trim().split('\n')[0]!.trim();
+          // An exact label wins over a longer one it starts ("Line" vs "Line map").
+          const el = icon
+            ? items.find((e) => e.querySelector(`mat-icon[data-mat-icon-name="${icon}"]`))
+            : (items.find((e) => label(e) === text) ??
+              items.find((e) => label(e).startsWith(text)));
           if (!el) return null;
           // Long menus (Insert) overflow the window; bring the item into view before measuring.
           el.scrollIntoView({ block: 'nearest' });
@@ -265,11 +274,51 @@ export class LookerStudioEditor {
       throw new EditorStepError(`there is no component ${index} on this page (it has ${count}).`);
     }
     await this.page.keyboard.press('Escape');
-    const point = await this.clickablePoint(index);
-    await this.page.mouse.click(point.x, point.y);
+    await this.closeBackdrop();
+    if (await this.component(index).locator('iframe').count()) {
+      // A click on a URL embed lands in the embedded page: draw a selection
+      // box around it from the empty canvas instead.
+      await this.deselect();
+      const box = (await this.layouts())[index]!;
+      const from = await this.toScreen(Math.max(0, box.x - 8), Math.max(0, box.y - 8));
+      const to = await this.toScreen(box.x + box.width + 8, box.y + box.height + 8);
+      await this.slowDrag(from, to);
+    } else {
+      // The selection handles of a tiny or flat component (a line) cover it.
+      const point = await this.clickablePoint(index).catch(async () => {
+        await this.deselect();
+        return this.clickablePoint(index);
+      });
+      await this.page.mouse.click(point.x, point.y);
+    }
     await sleep(700);
     await this.closeDatePopup();
     return this.panelTitle();
+  }
+
+  // Selects several components: the first by a click, the rest by Shift+click.
+  async selectMany(indexes: number[]): Promise<void> {
+    await this.select(indexes[0]!);
+    await this.page.keyboard.down('Shift');
+    try {
+      for (const index of indexes.slice(1)) {
+        const point = await this.clickablePoint(index);
+        await this.page.mouse.click(point.x, point.y);
+        await sleep(400);
+      }
+    } finally {
+      await this.page.keyboard.up('Shift');
+    }
+  }
+
+  // A selected button opens a link menu over a transparent backdrop that
+  // ignores Escape and swallows the next click: click the backdrop away.
+  private async closeBackdrop(): Promise<void> {
+    const backdrop = this.page.locator('.cdk-overlay-backdrop-showing').last();
+    if (await backdrop.isVisible().catch(() => false)) {
+      await backdrop.click({ position: { x: 2, y: 2 }, force: true }).catch(() => undefined);
+      await sleep(300);
+    }
   }
 
   async deselect(): Promise<void> {
@@ -571,6 +620,11 @@ export class LookerStudioEditor {
   private async pickField(field: string, slot: SetupSlot): Promise<boolean> {
     const x = slot.kind === 'add' ? slot.rect.x + slot.rect.width / 2 : slot.rect.x + 50;
     await this.page.mouse.click(x, slot.rect.y + slot.rect.height / 2);
+    return this.pickInFieldPicker(field);
+  }
+
+  // Searches the open field picker for `field` and clicks it. False if no picker opened.
+  private async pickInFieldPicker(field: string): Promise<boolean> {
     const search = this.page.locator('.cdk-overlay-container input[placeholder="Search"]').last();
     if (
       !(await search.waitFor({ timeout: 3_000 }).then(
@@ -726,7 +780,8 @@ export class LookerStudioEditor {
   // Charts choose between the data source's dates ("Auto") and their own
   // ("Custom"); the date range control only has the picker.
   async setDateRange(preset: string): Promise<void> {
-    const path = datePresetPath(preset);
+    const fixed = FIXED_RANGE_RE.exec(preset.trim());
+    const path = fixed ? ['Fixed'] : datePresetPath(preset);
     await this.step(`set the date range to ${preset}`, async () => {
       await this.closeDatePopup();
       await this.openTab('Setup');
@@ -755,7 +810,7 @@ export class LookerStudioEditor {
       const picker = await find('picker');
       if (!picker) throw new Error('the Setup tab has no date range picker');
       await this.page.mouse.click(picker.x, picker.y);
-      await this.pickInDatePopup(path);
+      await this.pickInDatePopup(path, fixed ? [fixed[1]!, fixed[2]!] : undefined);
     });
     await this.settle(500);
   }
@@ -789,7 +844,8 @@ export class LookerStudioEditor {
   }
 
   // The date popup has a preset menu button next to the calendars, and Apply.
-  private async pickInDatePopup(path: string[]): Promise<void> {
+  // A fixed range ("2026-10-01..2026-10-15") picks "Fixed" and clicks the days.
+  private async pickInDatePopup(path: string[], fixed?: [string, string]): Promise<void> {
     await sleep(800);
     const trigger = await this.page.evaluate(() => {
       const apply = [...document.querySelectorAll<HTMLElement>('button')]
@@ -810,27 +866,64 @@ export class LookerStudioEditor {
     if (!trigger) throw new Error('the date picker did not open');
     await this.walkMenu(() => this.page.mouse.click(trigger.x, trigger.y), path);
     await sleep(500);
+    if (fixed) {
+      // Two calendars: the start date on the left, the end date on the right.
+      await this.pickCalendarDay(0, fixed[0]);
+      await this.pickCalendarDay(1, fixed[1]);
+    }
     await this.page.getByRole('button', { name: 'Apply', exact: true }).last().click();
     await sleep(600);
   }
 
-  // Adds a filter to the selected chart or control: an existing one by name,
-  // or a new one-clause filter. Returns false when an existing filter was reused.
-  async addFilter(filter: {
-    name: string;
-    field?: string;
-    condition?: string;
-    values?: string[];
-    exclude?: boolean;
-  }): Promise<boolean> {
-    return this.step(`add the filter "${filter.name}"`, async () => {
-      await this.openTab('Setup');
-      await this.revealSection(/^Filter$/);
-      await this.page
-        .locator(SEL.propertiesPanel)
-        .getByText('Add filter', { exact: true })
-        .first()
+  // Pages the n-th visible calendar to the month of `iso` (YYYY-MM-DD) and clicks the day.
+  private async pickCalendarDay(n: number, iso: string): Promise<void> {
+    const [year, month, day] = iso.split('-').map(Number) as [number, number, number];
+    const calendar = this.page.locator('.cdk-overlay-container mat-calendar').nth(n);
+    const months = [
+      'JAN',
+      'FEB',
+      'MAR',
+      'APR',
+      'MAY',
+      'JUN',
+      'JUL',
+      'AUG',
+      'SEP',
+      'OCT',
+      'NOV',
+      'DEC',
+    ];
+    for (let guard = 0; guard < 240; guard++) {
+      const shown = (await calendar.locator('.mat-calendar-period-button').innerText()).trim();
+      const [m, y] = shown.toUpperCase().split(/\s+/);
+      const delta = (year - Number(y)) * 12 + (month - 1 - months.indexOf(m!));
+      if (delta === 0) break;
+      await calendar
+        .getByRole('button', { name: delta > 0 ? 'Next month' : 'Previous month' })
         .click();
+      await sleep(150);
+    }
+    const label = `${months[month - 1]![0]}${months[month - 1]!.slice(1).toLowerCase()} ${day}, ${year}`;
+    const cell = calendar.getByRole('button', { name: label, exact: true });
+    if (!(await cell.count()))
+      throw new Error(`${iso} cannot be picked (outside the data's dates?)`);
+    await cell.click();
+    await sleep(300);
+  }
+
+  // Adds a filter to the selected chart or control (or the open page/report
+  // settings): an existing one by name, or a new one. Returns false when an
+  // existing filter was reused.
+  async addFilter(
+    filter: { name: string; clauses: FilterClauseInput[][] },
+    scope: string = SEL.propertiesPanel,
+  ): Promise<boolean> {
+    return this.step(`add the filter "${filter.name}"`, async () => {
+      if (scope === SEL.propertiesPanel) {
+        await this.openTab('Setup');
+        await this.revealSection(/^Filter$/);
+      }
+      await this.page.locator(scope).getByText('Add filter', { exact: true }).first().click();
       await sleep(900);
       const overlay = this.page.locator('.cdk-overlay-container');
       const existing = overlay.getByText(filter.name, { exact: true });
@@ -839,63 +932,362 @@ export class LookerStudioEditor {
         await sleep(600);
         return false;
       }
-      if (!filter.field) {
+      if (!filter.clauses.length) {
         await this.page.keyboard.press('Escape');
         throw new Error(`the report has no filter named "${filter.name}"`);
       }
       await overlay.getByText('Create a filter', { exact: true }).first().click();
-      const name = this.page.getByPlaceholder('Filter name');
-      await name.waitFor({ timeout: this.timeoutMs });
-      await name.fill(filter.name);
-      if (filter.exclude) {
-        await this.chooseOption('mat-select[placeholder="Select a negation option"]', 'Exclude');
-      }
-      await this.page.getByText('Select a field', { exact: true }).last().click();
-      await sleep(600);
-      await this.page.keyboard.type(filter.field, { delay: 20 });
-      await sleep(600);
-      await this.page
-        .locator('.display-name-highlighted')
-        .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(filter.field)}\\s*$`) })
-        .last()
-        .click();
-      await sleep(800);
-      await this.chooseOption('mat-select[placeholder="Select a condition"]', filter.condition!);
-      const inputs = this.page.locator('input[aria-label="Input for filter value"]');
-      for (const [i, value] of (filter.values ?? []).entries()) {
-        const input = (await inputs.count()) > i ? inputs.nth(i) : inputs.last();
-        await input.click();
-        await this.page.keyboard.type(value, { delay: 10 });
-        await this.page.keyboard.press('Enter');
-        await sleep(300);
-      }
-      const save = this.page.getByRole('button', { name: 'Button to save the filter' });
-      if (await save.isDisabled()) {
-        await this.page
-          .getByRole('button', { name: 'Button to cancel the filter changes' })
-          .click();
-        throw new Error(
-          'the filter editor would not save it (check the field, condition and values)',
-        );
-      }
-      await save.click();
-      await save.waitFor({ state: 'hidden', timeout: this.timeoutMs });
-      await sleep(600);
+      await this.fillNewFilter(filter.name, filter.clauses);
       return true;
     });
   }
 
-  private async chooseOption(select: string, option: string): Promise<void> {
-    await this.page.locator(select).last().click();
-    await sleep(500);
-    const item = this.page.getByRole('option', { name: option, exact: true });
-    if (!(await item.count())) {
-      const options = (await this.page.getByRole('option').allTextContents()).map((o) => o.trim());
-      await this.page.keyboard.press('Escape');
-      throw new Error(`"${option}" is not one of: ${options.join(', ')}`);
+  // In the open filter editor: name it and add every clause. Groups are
+  // joined by AND, clauses in a group by OR; each new clause comes in last.
+  async fillNewFilter(name: string, groups: FilterClauseInput[][]): Promise<void> {
+    const nameBox = this.page.getByPlaceholder('Filter name');
+    await nameBox.waitFor({ timeout: this.timeoutMs });
+    await nameBox.fill(name);
+    await this.writeClauses(groups, false);
+    await this.saveFilter();
+  }
+
+  // In the open Edit Filter page: replaces every clause with `groups`.
+  async rewriteFilter(groups: FilterClauseInput[][], name?: string): Promise<void> {
+    const nameBox = this.page.getByPlaceholder('Filter name');
+    await nameBox.waitFor({ timeout: this.timeoutMs });
+    if (name) await nameBox.fill(name);
+    // Drop clauses from the end until one is left, then rewrite that one.
+    for (let n = await this.clauses().count(); n > 1; n--) {
+      await this.clauses()
+        .last()
+        .locator('button:has(mat-icon[data-mat-icon-name="close"])')
+        .click();
+      await sleep(600);
     }
-    await item.first().click();
+    await this.writeClauses(groups, true);
+    await this.saveFilter();
+  }
+
+  private clauses(): Locator {
+    return this.page.locator('.ng2-filter-expression-definition');
+  }
+
+  private async writeClauses(groups: FilterClauseInput[][], reuseFirst: boolean): Promise<void> {
+    // With suggestions on, the value box only takes values it can suggest
+    // (and none before the data loads): turn them off to type any value.
+    const toggle = this.page.locator(
+      '[role=switch][aria-label="Toggle switch whether to show suggestions or not"]',
+    );
+    if ((await toggle.getAttribute('aria-checked').catch(() => null)) === 'true') {
+      await toggle.click();
+      await sleep(600);
+    }
+    let first = true;
+    for (const group of groups) {
+      for (const [i, clause] of group.entries()) {
+        if (!first) {
+          await this.page
+            .locator('button')
+            .filter({ hasText: new RegExp(`^\\s*${i === 0 ? 'AND' : 'OR'}\\s*$`) })
+            .last()
+            .click();
+          await sleep(700);
+        }
+        const row = this.clauses().last();
+        const picker =
+          first && reuseFirst
+            ? row.locator('.concept-chip-container').first()
+            : row.getByText('Select a field', { exact: true }).first();
+        first = false;
+        await picker.click();
+        if (!(await this.pickInFieldPicker(clause.field)))
+          throw new Error(`no field picker for "${clause.field}"`);
+        await sleep(500);
+        await this.fillClause(clause, row);
+      }
+    }
+  }
+
+  // Negation, condition and values of one clause of the filter editor.
+  async fillClause(clause: Omit<FilterClauseInput, 'field'>, row: Locator): Promise<void> {
+    await this.chooseOption(
+      row.locator('mat-select[placeholder="Select a negation option"]'),
+      clause.exclude ? 'Exclude' : 'Include',
+    );
+    await this.chooseOption(
+      row.locator('mat-select[placeholder="Select a condition"]'),
+      clause.condition,
+    );
+    const values = clause.values ?? [];
+    const inputs = row.locator('input');
+    const count = await inputs.count();
+    if (values.length && !count) throw new Error(`"${clause.condition}" takes no values`);
+    // "In" takes every value in one box, comma separated; "Between" takes two boxes.
+    const entries = count === 1 ? [values.join(',')] : values;
+    for (const [i, value] of entries.entries()) {
+      const box = inputs.nth(Math.min(i, count - 1));
+      await box.click();
+      await box.fill(value);
+      await box.press('Tab');
+      await sleep(300);
+    }
+  }
+
+  async saveFilter(): Promise<void> {
+    const save = this.page.getByRole('button', { name: 'Button to save the filter' });
+    if (await save.isDisabled()) {
+      await this.page.getByRole('button', { name: 'Button to cancel the filter changes' }).click();
+      throw new Error(
+        'the filter editor would not save it (check the fields, conditions and values)',
+      );
+    }
+    await save.click();
+    await save.waitFor({ state: 'hidden', timeout: this.timeoutMs });
+    await sleep(600);
+  }
+
+  // Picks `option` in a mat-select; matched ignoring case and a "(=)" suffix,
+  // since some lists are upper-cased ("GREATER THAN") and others are not.
+  async chooseOption(select: Locator, option: string): Promise<void> {
+    await select.click({ force: true });
     await sleep(500);
+    const options = this.page.getByRole('option');
+    const texts = (await options.allTextContents()).map((o) => o.replace(/\s+/g, ' ').trim());
+    const norm = (t: string) =>
+      t
+        .toLowerCase()
+        .replace(/\(.*?\)/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const at = texts.findIndex((t) => norm(t) === norm(option));
+    if (at < 0) {
+      await this.page.keyboard.press('Escape');
+      throw new Error(`"${option}" is not one of: ${texts.join(', ')}`);
+    }
+    await options.nth(at).click();
+    await sleep(500);
+  }
+
+  // Style › Conditional formatting › Add formatting: rules (AND groups of OR
+  // rules), what they color and the colors.
+  async addConditionalFormat(format: ConditionalFormat): Promise<void> {
+    await this.step('add conditional formatting', async () => {
+      await this.openTab('Style');
+      await this.page
+        .locator(SEL.propertiesPanel)
+        .getByText('Add formatting', { exact: true })
+        .first()
+        .click();
+      const sheet = this.page.locator('.conditions-editor').last();
+      await sheet.waitFor({ timeout: this.timeoutMs });
+      let first = true;
+      for (const group of format.rules) {
+        for (const [i, rule] of group.entries()) {
+          if (!first) {
+            await sheet
+              .locator(`button[aria-label="${i === 0 ? 'and' : 'or'}"]`)
+              .last()
+              .click();
+            await sleep(700);
+          }
+          first = false;
+          await sheet.getByText('Select a field', { exact: true }).last().click();
+          await sleep(600);
+          await this.page.keyboard.type(rule.field, { delay: 20 });
+          await sleep(600);
+          await this.page
+            .locator('.display-name-highlighted')
+            .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(rule.field)}\\s*$`) })
+            .last()
+            .click();
+          await sleep(800);
+          await this.chooseOption(
+            sheet.locator('mat-select.select-condition-dropdown').last(),
+            rule.condition,
+          );
+          if (rule.value !== undefined) {
+            const value = sheet.locator('input[placeholder="Input value"]').last();
+            await value.fill(rule.value);
+            await value.press('Tab');
+          }
+        }
+      }
+      if (format.applyTo) {
+        await this.chooseOption(
+          sheet.locator('mat-select').filter({ hasText: 'Entire row' }).last(),
+          format.applyTo,
+        );
+      }
+      const scope = '.conditions-editor';
+      const colors: Array<[string | undefined, string[]]> = [
+        [format.fontColor, ['Cell font color', 'Font color', 'Text color']],
+        [format.backgroundColor, ['Cell background color', 'Background color', 'Fill color']],
+      ];
+      for (const [color, labels] of colors) {
+        if (!color) continue;
+        let done = false;
+        for (const label of labels) {
+          if ((await this.applySettings({ [label]: color }, scope)).length === 0) {
+            done = true;
+            break;
+          }
+        }
+        if (!done) throw new Error(`the formatting sheet has no ${labels[0]}`);
+      }
+      const save = this.page.getByRole('button', { name: 'Save', exact: true }).last();
+      if (await save.isDisabled()) {
+        await this.page.getByRole('button', { name: 'Cancel', exact: true }).last().click();
+        throw new Error(
+          'the formatting rule is incomplete (check the fields, conditions and values)',
+        );
+      }
+      await save.click();
+      await sleep(1000);
+    });
+  }
+
+  // Style › Reference lines: each new line or band is numbered after the
+  // existing ones, so its settings are addressed as "Line value#3" and so on.
+  async addReferences(lines: ReferenceLine[], bands: ReferenceBand[]): Promise<string[]> {
+    await this.openTab('Style');
+    const panel = this.page.locator(SEL.propertiesPanel);
+    const missing: string[] = [];
+    let lineCount = await panel.getByText(/^Reference Line #\d+$/).count();
+    let bandCount = await panel.getByText(/^Reference Band #\d+$/).count();
+    for (const line of lines) {
+      await panel.getByText('Add a reference line', { exact: true }).first().click();
+      await sleep(800);
+      const k = ++lineCount;
+      missing.push(
+        ...(await this.applySettings({
+          ...(line.type ? { [`Line type#${k}`]: line.type } : {}),
+          ...(line.axis ? { [`Line axis#${k}`]: line.axis } : {}),
+          ...(line.value !== undefined ? { [`Line value#${k}`]: line.value } : {}),
+          ...(line.label ? { [`Show label#${k}`]: true, [`Line label#${k}`]: line.label } : {}),
+          ...(line.color ? { [`Line color#${k}`]: line.color } : {}),
+        })),
+      );
+    }
+    for (const band of bands) {
+      await panel.getByText('Add a reference band', { exact: true }).first().click();
+      await sleep(800);
+      const k = ++bandCount;
+      missing.push(
+        ...(await this.applySettings({
+          [`Beginning line value#${k}`]: band.from,
+          [`Ending line value#${k}`]: band.to,
+          ...(band.label
+            ? { [`Show label#${lineCount + k}`]: true, [`Band label#${k}`]: band.label }
+            : {}),
+          ...(band.color ? { [`Background color#${k}`]: band.color } : {}),
+        })),
+      );
+    }
+    return missing;
+  }
+
+  // Tables sort by up to several fields: "Add sort" opens the field picker
+  // and adds "Sort #2", "Sort #3"… with their own Descending/Ascending.
+  async addSorts(sorts: Array<{ field: string; ascending?: boolean }>): Promise<string[]> {
+    await this.openTab('Setup');
+    const panel = this.page.locator(SEL.propertiesPanel);
+    const missing: string[] = [];
+    for (const sort of sorts) {
+      const k = (await panel.getByText(/^Sort #\d+$/).count()) + 1;
+      const add = panel.getByText('Add sort', { exact: true }).first();
+      if (!(await add.count())) {
+        missing.push(`sort #${k} (this chart takes a single sort)`);
+        continue;
+      }
+      await this.step(`add sort #${k} by ${sort.field}`, async () => {
+        await add.scrollIntoViewIfNeeded();
+        await add.click();
+        if (!(await this.pickInFieldPicker(sort.field)))
+          throw new Error('the field picker did not open');
+      });
+      await sleep(600);
+      missing.push(
+        ...(await this.applySettings({
+          [`${sort.ascending ? 'Ascending' : 'Descending'}#${k}`]: true,
+        })),
+      );
+    }
+    return missing;
+  }
+
+  // Switches the selected chart through the "Chart types" grid, whose presets
+  // are in the same order as "Add a chart" but carry no labels.
+  async switchChartType(preset: string, at: number): Promise<string> {
+    return this.step(`switch the chart to ${preset}`, async () => {
+      const panel = this.page.locator(SEL.propertiesPanel);
+      const grid = this.page.locator('properties-panel preset-preview');
+      if (
+        !(await grid
+          .first()
+          .isVisible()
+          .catch(() => false))
+      ) {
+        await panel.getByText('Chart types', { exact: true }).first().click();
+        await sleep(800);
+      }
+      await grid.nth(at).click();
+      await sleep(1200);
+      await panel
+        .getByText('Chart types', { exact: true })
+        .first()
+        .click()
+        .catch(() => undefined);
+      await sleep(400);
+      return this.panelTitle();
+    });
+  }
+
+  // A line's "Line start" and "Line end" drop-downs carry no label: they are
+  // the two whose value is a line end (None, Circle, Diamond, Pointer).
+  async setLineEnds(start?: string, end?: string): Promise<void> {
+    const selects = this.page
+      .locator(`${SEL.propertiesPanel} mat-select`)
+      .filter({ hasText: /^\s*(None|Circle|Diamond|Pointer)\s*$/ });
+    if ((await selects.count()) < 2)
+      throw new EditorStepError('the line has no start/end settings');
+    if (start) await this.chooseOption(selects.nth(0), start);
+    if (end) await this.chooseOption(selects.nth(1), end);
+  }
+
+  // Button controls: a link (URL or page of the report) or a report action.
+  async setButton(button: ButtonSpec): Promise<string[]> {
+    await this.closeBackdrop();
+    await this.openTab('Setup');
+    const panel = this.page.locator(SEL.propertiesPanel);
+    if (button.action === 'report_action') {
+      await this.applySettings({ 'Report Actions': true });
+      return this.applySettings({ Action: button.reportAction! });
+    }
+    await this.applySettings({ Navigation: true });
+    await panel.getByText('Insert link', { exact: true }).first().click();
+    const box = this.page.getByPlaceholder('Paste a link, or select a page');
+    await box.waitFor({ timeout: this.timeoutMs });
+    if (button.url) {
+      await box.fill(button.url);
+    } else {
+      await box.click();
+      await this.page.keyboard.type(button.page!, { delay: 15 });
+      await sleep(700);
+      const option = this.page
+        .locator('.cdk-overlay-container [role=option], .cdk-overlay-container mat-option')
+        .filter({ hasText: button.page! })
+        .first();
+      if (!(await option.count())) throw new Error(`the report has no page named "${button.page}"`);
+      await option.click();
+    }
+    const newTab = this.page.getByRole('checkbox', { name: 'Open link in new tab' });
+    if ((await newTab.count()) && (await newTab.isChecked()) !== !!button.newTab) {
+      await newTab.click({ force: true });
+    }
+    await this.page.getByRole('button', { name: 'Apply', exact: true }).last().click();
+    await sleep(600);
+    return [];
   }
 
   // Line/bars, axis and color of each metric of a combo or line chart.
