@@ -1,7 +1,8 @@
 import { createReport } from '@/contexts/reports/application/reportUseCases.js';
+import { describeSource } from '@/contexts/reports/domain/Report.js';
 import { createReportSchema } from '@/mcp/schemas.js';
 import {
-  resolveProject,
+  resolveSource,
   runWrite,
   text,
   type ToolResult,
@@ -15,12 +16,8 @@ export async function handleCreateReport(
   raw: unknown,
 ): Promise<ToolResult> {
   const input = createReportSchema.parse(raw);
-  const source = {
-    projectId: resolveProject(deps.defaultProject, input.project_id),
-    datasetId: input.dataset_id,
-    tableId: input.table_id,
-  };
-  const table = `${source.projectId}.${source.datasetId}.${source.tableId}`;
+  const source = resolveSource(deps.defaultProject, input);
+  const table = describeSource(source);
   return runWrite(
     deps,
     'create_report',

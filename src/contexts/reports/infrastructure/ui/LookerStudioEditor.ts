@@ -11,7 +11,12 @@ import type {
   SettingInfo,
   StyleSettings,
 } from '@/contexts/reports/domain/Report.js';
-import { FIXED_RANGE_RE, HEX_COLOR_RE } from '@/contexts/reports/domain/Report.js';
+import {
+  FIXED_RANGE_RE,
+  HEX_COLOR_RE,
+  describeSource,
+  isQuerySource,
+} from '@/contexts/reports/domain/Report.js';
 
 type FilterClauseInput = FilterClause;
 import { InfrastructureError } from '@/shared-kernel/errors/InfrastructureError.js';
@@ -478,36 +483,58 @@ export class LookerStudioEditor {
 
   // Fills the BigQuery connector dialog that "Add data" (or a new report) opens.
   async connectBigQuery(source: BigQuerySource): Promise<void> {
-    await this.step(
-      `connect BigQuery ${source.projectId}.${source.datasetId}.${source.tableId}`,
-      async () => {
-        await this.page
-          .getByText('BigQuery', { exact: true })
-          .first()
-          .click({ timeout: this.timeoutMs });
-        const manual = this.page.getByPlaceholder('Enter Project Id manually');
-        await manual.waitFor({ timeout: this.timeoutMs });
-        await manual.fill(source.projectId);
-        await manual.press('Enter');
-        // The dataset list sometimes never loads after the first Enter: ask again.
-        await this.clickVisibleText(source.datasetId, this.timeoutMs / 2).catch(async () => {
-          await manual.fill('');
-          await manual.fill(source.projectId);
-          await manual.press('Enter');
-          await this.clickVisibleText(source.datasetId);
-        });
-        await this.clickVisibleText(source.tableId);
-        await this.page.getByRole('button', { name: 'Add', exact: true }).click();
-        // Existing reports ask to confirm; new ones go straight to the editor.
-        const confirm = this.page.getByRole('button', { name: 'Add to report', exact: true });
-        await confirm.click({ timeout: 5_000 }).catch(() => undefined);
-        await this.page
-          .locator(SEL.dataPanelChip('Record Count'))
-          .first()
-          .waitFor({ timeout: this.timeoutMs });
-      },
-    );
+    await this.step(`connect BigQuery ${describeSource(source)}`, async () => {
+      await this.page
+        .getByText('BigQuery', { exact: true })
+        .first()
+        .click({ timeout: this.timeoutMs });
+      if (isQuerySource(source)) {
+        await this.fillCustomQuery(source.projectId, source.sql);
+      } else {
+        await this.pickTable(source.projectId, source.datasetId, source.tableId);
+      }
+      await this.page.getByRole('button', { name: 'Add', exact: true }).click();
+      // Existing reports ask to confirm; new ones go straight to the editor.
+      const confirm = this.page.getByRole('button', { name: 'Add to report', exact: true });
+      await confirm.click({ timeout: 5_000 }).catch(() => undefined);
+      await this.page
+        .locator(SEL.dataPanelChip('Record Count'))
+        .first()
+        .waitFor({ timeout: this.timeoutMs });
+    });
     await this.settle();
+  }
+
+  private async pickTable(projectId: string, datasetId: string, tableId: string): Promise<void> {
+    const manual = this.page.getByPlaceholder('Enter Project Id manually');
+    await manual.waitFor({ timeout: this.timeoutMs });
+    await manual.fill(projectId);
+    await manual.press('Enter');
+    // The dataset list sometimes never loads after the first Enter: ask again.
+    await this.clickVisibleText(datasetId, this.timeoutMs / 2).catch(async () => {
+      await manual.fill('');
+      await manual.fill(projectId);
+      await manual.press('Enter');
+      await this.clickVisibleText(datasetId);
+    });
+    await this.clickVisibleText(tableId);
+  }
+
+  // CUSTOM QUERY tab: the billing projects are listed by display name, so the
+  // row is found by the console link that carries the project id.
+  private async fillCustomQuery(projectId: string, sql: string): Promise<void> {
+    await this.clickVisibleText('Custom Query');
+    const project = this.page.locator(SEL.billingProject(projectId)).first();
+    await project.waitFor({ timeout: this.timeoutMs }).catch(() => {
+      throw new Error(`"${projectId}" is not among the billing projects this account can use`);
+    });
+    await project.click();
+    const editor = this.page.locator(SEL.customQueryEditor).first();
+    await editor.waitFor({ timeout: this.timeoutMs });
+    // CodeMirror ignores fill(); its instance takes the text directly.
+    await editor.evaluate((e, text) => {
+      (e as HTMLElement & { CodeMirror: { setValue(v: string): void } }).CodeMirror.setValue(text);
+    }, sql);
   }
 
   // Picks the data source in the Setup panel when the report has several: the

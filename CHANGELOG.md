@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `create_report`, `add_data_source` and `build_report_link` take a custom query: `sql` instead of `dataset_id` and `table_id`, with `project_id` as the billing project. `source_name` names the data source; without it Looker Studio names it after the first table in the query.
 - Filters take several clauses (`clauses`: AND groups of OR clauses). Filter values are typed with the editor's suggestions off: with them on, a typed value that the editor could not suggest was dropped and the filter was saved empty.
 - `date_range` takes fixed dates (`2026-10-01..2026-10-15`).
 - Charts and `update_component` take `sorts` (Sort #2…), `reference_lines`, `reference_bands` and `conditional_formats`; pivots sort their first row dimension by `sort_by`.

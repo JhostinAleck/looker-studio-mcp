@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  InvalidSourceError,
   MissingProjectError,
   errorResult,
   fieldsToMarkdown,
   formatBytes,
   resolveProject,
+  resolveSource,
   rowsToMarkdown,
   runWrite,
   text,
@@ -54,6 +56,26 @@ describe('tool helpers', () => {
     expect(resolveProject('p', undefined)).toBe('p');
     expect(resolveProject('p', 'q')).toBe('q');
     expect(() => resolveProject(undefined, undefined)).toThrow(MissingProjectError);
+  });
+
+  it('reads a table or a custom query source, never both', () => {
+    expect(resolveSource('p', { dataset_id: 'd', table_id: 't' })).toEqual({
+      projectId: 'p',
+      datasetId: 'd',
+      tableId: 't',
+    });
+    expect(resolveSource('p', { project_id: 'b', sql: ' SELECT 1 ', source_name: 'One' })).toEqual({
+      projectId: 'b',
+      sql: 'SELECT 1',
+      name: 'One',
+    });
+    expect(() => resolveSource('p', { sql: 'SELECT 1', table_id: 't' })).toThrow(
+      InvalidSourceError,
+    );
+    expect(() => resolveSource('p', { dataset_id: 'd' })).toThrow(InvalidSourceError);
+    expect(() => resolveSource('p', { dataset_id: 'd', table_id: 't', source_name: 'x' })).toThrow(
+      InvalidSourceError,
+    );
   });
 
   it('shows the user message of domain errors', () => {

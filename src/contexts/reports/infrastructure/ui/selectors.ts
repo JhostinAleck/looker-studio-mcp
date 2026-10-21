@@ -334,6 +334,12 @@ export const SEL = {
   panelTitle: 'properties-panel article.property-panel header .title',
   // Field chips of the Data panel (right side) carry the field name as aria-label.
   dataPanelChip: (field: string) => `div.common-chip[aria-label="${cssEscape(field)}"]`,
+  // BigQuery connector › CUSTOM QUERY: a billing project row and the SQL editor.
+  billingProject: (projectId: string) =>
+    `ng2-config-column-item:has(a[href*="project=${cssEscape(projectId)}&"])`,
+  customQueryEditor: '.CodeMirror',
+  // Name box at the top of the data source editor.
+  dataSourceNameInput: 'input.mat-mdc-input-element',
   // Text formatting buttons carry no label, only their Material icon.
   iconButton: (icon: string) => `button:has(mat-icon[data-mat-icon-name="${cssEscape(icon)}"])`,
   preset: (label: string) => `preset-preview[aria-label="${cssEscape(label)}"]`,

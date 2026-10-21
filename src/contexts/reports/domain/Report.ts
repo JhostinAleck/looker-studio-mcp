@@ -6,10 +6,31 @@ export interface ReportSummary {
   url: string;
 }
 
-export interface BigQuerySource {
+export interface BigQueryTableSource {
   projectId: string;
   datasetId: string;
   tableId: string;
+}
+
+// A data source defined by SQL instead of a table. `projectId` is the billing
+// project the query runs in; `name` replaces the name Looker Studio picks.
+export interface BigQueryQuerySource {
+  projectId: string;
+  sql: string;
+  name?: string;
+}
+
+export type BigQuerySource = BigQueryTableSource | BigQueryQuerySource;
+
+export function isQuerySource(source: BigQuerySource): source is BigQueryQuerySource {
+  return 'sql' in source;
+}
+
+// Short label for logs and tool replies.
+export function describeSource(source: BigQuerySource): string {
+  if (!isQuerySource(source)) return `${source.projectId}.${source.datasetId}.${source.tableId}`;
+  const sql = source.sql.replace(/\s+/g, ' ').trim();
+  return `custom query on ${source.projectId}: ${sql.length > 60 ? `${sql.slice(0, 57)}...` : sql}`;
 }
 
 export const CHART_TYPES = [

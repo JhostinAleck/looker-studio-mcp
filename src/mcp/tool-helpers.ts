@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Field, QueryResult } from '@/contexts/bigquery/domain/BigQuery.js';
+import type { BigQuerySource } from '@/contexts/reports/domain/Report.js';
 import type { AuditLogger } from '@/shared-kernel/audit/AuditLogger.js';
 import { DomainError } from '@/shared-kernel/errors/DomainError.js';
 import type { WritesGate } from '@/shared-kernel/writes/WritesGate.js';
@@ -33,6 +34,35 @@ export class MissingProjectError extends DomainError {
   readonly code = 'MISSING_PROJECT';
   readonly userMessage =
     'No Google Cloud project: pass project_id or set project_id in ~/.looker-studio-mcp/config.yaml.';
+}
+
+export class InvalidSourceError extends DomainError {
+  readonly code = 'INVALID_SOURCE';
+  readonly userMessage =
+    'Give a data source as either sql (custom query) or dataset_id and table_id, not both.';
+}
+
+interface SourceInput {
+  project_id?: string | undefined;
+  dataset_id?: string | undefined;
+  table_id?: string | undefined;
+  sql?: string | undefined;
+  source_name?: string | undefined;
+}
+
+// Turns the tool fields into a table or custom query source.
+export function resolveSource(
+  defaultProject: string | undefined,
+  input: SourceInput,
+): BigQuerySource {
+  const projectId = resolveProject(defaultProject, input.project_id);
+  const sql = input.sql?.trim();
+  if (sql) {
+    if (input.dataset_id || input.table_id) throw new InvalidSourceError();
+    return { projectId, sql, ...(input.source_name ? { name: input.source_name } : {}) };
+  }
+  if (!input.dataset_id || !input.table_id || input.source_name) throw new InvalidSourceError();
+  return { projectId, datasetId: input.dataset_id, tableId: input.table_id };
 }
 
 export function resolveProject(

@@ -1,4 +1,4 @@
-import type { BigQuerySource } from './Report.js';
+import { isQuerySource, type BigQuerySource } from './Report.js';
 
 export interface LinkingRequest {
   reportName: string;
@@ -11,7 +11,7 @@ export interface LinkingRequest {
 }
 
 // Builds a Looker Studio Linking API URL that creates a copy of a report
-// (or a blank one) already connected to BigQuery tables.
+// (or a blank one) already connected to BigQuery tables or custom queries.
 export function buildLinkingUrl(req: LinkingRequest): string {
   const params = new URLSearchParams();
   params.set('c.mode', req.mode ?? 'edit');
@@ -22,10 +22,15 @@ export function buildLinkingUrl(req: LinkingRequest): string {
     const alias = req.templateReportId ? (source.alias ?? `ds${i}`) : '*';
     const p = `ds.${alias}`;
     params.set(`${p}.connector`, 'bigQuery');
-    params.set(`${p}.type`, 'TABLE');
     params.set(`${p}.projectId`, source.projectId);
-    params.set(`${p}.datasetId`, source.datasetId);
-    params.set(`${p}.tableId`, source.tableId);
+    if (isQuerySource(source)) {
+      params.set(`${p}.type`, 'CUSTOM_QUERY');
+      params.set(`${p}.sql`, source.sql);
+    } else {
+      params.set(`${p}.type`, 'TABLE');
+      params.set(`${p}.datasetId`, source.datasetId);
+      params.set(`${p}.tableId`, source.tableId);
+    }
     if (source.name) params.set(`${p}.datasourceName`, source.name);
   });
   return `https://lookerstudio.google.com/reporting/create?${params.toString()}`;

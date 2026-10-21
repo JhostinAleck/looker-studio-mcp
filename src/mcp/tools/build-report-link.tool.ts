@@ -1,6 +1,6 @@
 import { buildLinkingUrl } from '@/contexts/reports/domain/linking.js';
 import { buildReportLinkSchema } from '@/mcp/schemas.js';
-import { resolveProject, text, type ToolResult } from '@/mcp/tool-helpers.js';
+import { resolveSource, text, type ToolResult } from '@/mcp/tool-helpers.js';
 
 import type { ReportToolDeps } from './reports-deps.js';
 
@@ -13,9 +13,7 @@ export function handleBuildReportLink(
     reportName: input.report_name,
     ...(input.template_report_id ? { templateReportId: input.template_report_id } : {}),
     sources: input.sources.map((s) => ({
-      projectId: resolveProject(deps.defaultProject, s.project_id),
-      datasetId: s.dataset_id,
-      tableId: s.table_id,
+      ...resolveSource(deps.defaultProject, s),
       ...(s.alias ? { alias: s.alias } : {}),
       ...(s.name ? { name: s.name } : {}),
     })),

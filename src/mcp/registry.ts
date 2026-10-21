@@ -148,7 +148,7 @@ const TOOLS: ToolDef[] = [
     name: 'build_report_link',
     title: 'Build a report link',
     description:
-      'Build a Looker Studio Linking API URL that creates a report (blank or copied from a template) connected to BigQuery tables. The user opens it to confirm.',
+      'Build a Looker Studio Linking API URL that creates a report (blank or copied from a template) connected to BigQuery tables, views or custom queries (sql). The user opens it to confirm.',
     schema: schemas.buildReportLinkSchema,
     write: false,
     run: handleBuildReportLink,
@@ -173,7 +173,8 @@ const TOOLS: ToolDef[] = [
   {
     name: 'create_report',
     title: 'Create a report',
-    description: 'Create a Looker Studio report connected to a BigQuery table or view.',
+    description:
+      'Create a Looker Studio report connected to a BigQuery table or view, or to a custom query: pass sql (and optionally source_name) instead of dataset_id and table_id.',
     schema: schemas.createReportSchema,
     write: true,
     run: handleCreateReport,
@@ -181,7 +182,8 @@ const TOOLS: ToolDef[] = [
   {
     name: 'add_data_source',
     title: 'Add a data source',
-    description: 'Connect another BigQuery table or view to an existing report.',
+    description:
+      'Connect another BigQuery table or view to an existing report, or a custom query: pass sql instead of dataset_id and table_id. project_id is then the billing project; source_name names the data source (Looker Studio otherwise names it after the first table in the query).',
     schema: schemas.addDataSourceSchema,
     write: true,
     run: handleAddDataSource,

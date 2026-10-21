@@ -158,4 +158,16 @@ describe('buildLinkingUrl', () => {
     expect(url.searchParams.get('ds.ds0.datasetId')).toBe('d');
     expect(url.searchParams.get('ds.ds7.projectId')).toBe('p-12345');
   });
+
+  it('passes a custom query as CUSTOM_QUERY with its SQL', () => {
+    const sql = 'SELECT platform, COUNT(*) AS n FROM `p-12345.d.t` GROUP BY 1';
+    const url = new URL(
+      buildLinkingUrl({ reportName: 'Q', sources: [{ projectId: 'p-12345', sql, name: 'Q1' }] }),
+    );
+    expect(url.searchParams.get('ds.*.type')).toBe('CUSTOM_QUERY');
+    expect(url.searchParams.get('ds.*.sql')).toBe(sql);
+    expect(url.searchParams.get('ds.*.projectId')).toBe('p-12345');
+    expect(url.searchParams.get('ds.*.datasetId')).toBeNull();
+    expect(url.searchParams.get('ds.*.datasourceName')).toBe('Q1');
+  });
 });

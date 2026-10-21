@@ -39,6 +39,7 @@ import {
   type ReportSummary,
   type StyleSettings,
   filterClauses,
+  isQuerySource,
   reportUrl,
 } from '@/contexts/reports/domain/Report.js';
 import type { Logger } from '@/shared-kernel/logging/Logger.js';
@@ -155,6 +156,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     return this.opts.browser.withPage(async (page) => {
       const editor = await LookerStudioEditor.openNew(page, this.opts.stepTimeoutMs);
       await editor.connectBigQuery(source);
+      if (isQuerySource(source) && source.name) await this.renameNewestSource(editor, source.name);
       await editor.rename(name);
       const id = (await editor.saveNew()).toLowerCase();
       return { id, name, url: reportUrl(id) };
@@ -168,7 +170,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       await editor.clickMenu('Resource', ['Manage added data sources']);
       await page.locator('tr, [role=row]').nth(1).waitFor({ timeout: this.opts.stepTimeoutMs });
       const sources = await this.listedSources(editor);
-      await page.keyboard.press('Escape');
+      await this.closeSourcesPanel(editor);
       const targets = name ? sources.filter((s) => s === name) : sources;
       if (targets.length === 0) {
         throw new EditorStepError(
@@ -194,14 +196,23 @@ export class LookerStudioUiReportRepository implements ReportRepository {
             await dialog.getByRole('button', { name: 'Apply' }).click();
             await editor.settle(1500);
           }
+          // Nothing changed: Looker Studio says so and waits for Continue.
+          const same = page.locator('mat-dialog-container', {
+            hasText: 'No connection changes were found',
+          });
+          if (await same.isVisible().catch(() => false)) {
+            await same.getByRole('button', { name: 'Continue' }).click();
+            await editor.settle(800);
+          }
           await page
             .getByRole('button', { name: 'Done' })
             .first()
             .click({ timeout: this.opts.stepTimeoutMs });
           await editor.settle(800);
+          // Back in the Data sources panel, which covers the menu the next source needs.
+          await this.closeSourcesPanel(editor);
         });
       }
-      await page.keyboard.press('Escape');
       return added;
     });
   }
@@ -210,6 +221,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     await this.edit(reportId, async (editor) => {
       await editor.page.getByRole('button', { name: 'Add data', exact: true }).first().click();
       await editor.connectBigQuery(source);
+      if (isQuerySource(source) && source.name) await this.renameNewestSource(editor, source.name);
     });
   }
 
@@ -635,6 +647,58 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         .getByRole('button', { name: 'REFRESH FIELDS' })
         .waitFor({ timeout: this.opts.stepTimeoutMs });
     });
+  }
+
+  // Looker Studio names a custom query after the first table it reads. The
+  // newest data source has the highest alias (dsN) in Manage added data sources.
+  private async renameNewestSource(editor: LookerStudioEditor, name: string): Promise<void> {
+    const page = editor.page;
+    await editor.clickMenu('Resource', ['Manage added data sources']);
+    await page.locator('tr, [role=row]').nth(1).waitFor({ timeout: this.opts.stepTimeoutMs });
+    await editor.step(`name the new data source "${name}"`, async () => {
+      const found = await page.evaluate(() => {
+        let best: { n: number; name: string; x: number; y: number } | null = null;
+        for (const row of document.querySelectorAll('tr, [role=row]')) {
+          const cells = [...row.querySelectorAll('td, [role=cell]')];
+          const alias = /^ds(\d+)$/.exec(cells.at(-1)?.textContent?.trim() ?? '');
+          const button = [...row.querySelectorAll('button')].find((b) =>
+            /^edit$/i.test(b.textContent?.trim() ?? ''),
+          );
+          if (!alias || !button) continue;
+          const n = Number(alias[1]);
+          if (best && best.n >= n) continue;
+          const r = button.getBoundingClientRect();
+          const current = cells[0]?.textContent?.trim() ?? '';
+          best = { n, name: current, x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        }
+        return best;
+      });
+      if (!found) throw new Error('the new data source is not in the list');
+      await page.mouse.click(found.x, found.y);
+      await page
+        .getByRole('button', { name: 'REFRESH FIELDS' })
+        .waitFor({ timeout: this.opts.stepTimeoutMs });
+      const box = page.locator(SEL.dataSourceNameInput).filter({ visible: true });
+      const index = await box.evaluateAll(
+        (inputs, current) => inputs.findIndex((i) => (i as HTMLInputElement).value === current),
+        found.name,
+      );
+      if (index < 0) throw new Error('the data source name box was not found');
+      await box.nth(index).fill(name);
+      await box.nth(index).press('Enter');
+      await editor.settle(800);
+      await page.getByRole('button', { name: 'Done' }).first().click();
+      await editor.settle(800);
+    });
+    await this.closeSourcesPanel(editor);
+  }
+
+  // Escape no longer closes the Data sources panel, and the open panel covers
+  // the menu bar: close it with its CLOSE button.
+  private async closeSourcesPanel(editor: LookerStudioEditor): Promise<void> {
+    const close = editor.page.getByRole('button', { name: /^close$/i }).first();
+    if (await close.isVisible().catch(() => false)) await close.click();
+    await editor.settle(800);
   }
 
   private listedSources(editor: LookerStudioEditor): Promise<string[]> {

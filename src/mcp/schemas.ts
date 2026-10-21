@@ -335,10 +335,26 @@ export const listReportsSchema = z.object({
   query: z.string().optional().describe('Only reports whose name contains this text'),
 });
 
+// A data source is a table/view (dataset_id + table_id) or a custom query (sql).
 const sourceShape = {
-  project_id: projectId,
-  dataset_id: datasetId,
-  table_id: z.string().describe('Table or view the report reads'),
+  project_id: z
+    .string()
+    .optional()
+    .describe(
+      'Google Cloud project id (for sql: the billing project). Defaults to project_id in the config.',
+    ),
+  dataset_id: datasetId.optional().describe('Dataset of table_id'),
+  table_id: z.string().optional().describe('Table or view the report reads'),
+  sql: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Custom query (GoogleSQL SELECT) to use instead of a table or view'),
+  source_name: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Name of the custom query data source in the report (only with sql)'),
 };
 
 export const createReportSchema = z.object({

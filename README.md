@@ -96,15 +96,15 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `list_components` | Charts, texts and shapes of a page: index, kind, layout |
 | `describe_component` | Every Setup/Style setting of a component with its exact label and value |
 | `screenshot_report` | PNG of a page in view mode, returned as an image |
-| `build_report_link` | A Linking API URL that creates a report from BigQuery sources |
+| `build_report_link` | A Linking API URL that creates a report from BigQuery tables or custom queries |
 
 ### Write tools (require writes)
 
 | Tool | What it does |
 |---|---|
 | `create_view`, `delete_view` | BigQuery views (dry-run validated first) |
-| `create_report` | New report connected to a BigQuery table or view |
-| `add_data_source` | Connect another BigQuery table to a report |
+| `create_report` | New report connected to a BigQuery table, view or custom query (`sql`) |
+| `add_data_source` | Connect another BigQuery table, view or custom query (`sql`, optional `source_name`) to a report |
 | `refresh_data_source` | Re-read a data source's fields after a column was added to the table or view |
 | `add_chart` | All 49 chart presets: tables (with bars/heatmap), scorecards (compact, with dimension, sparkline), time series, bars (stacked, 100%), histogram, pie, donut, line, area, combo, pivot tables (with bars/heatmap), funnel, waterfall, sankey, bullet, gauge, treemap, scatter, bubble, boxplot, candlestick, timeline, geo and Google Maps — with dimensions, metrics (aggregation, display name), breakdown, sorts (Sort #2…), extra Setup slots, filters (AND/OR), default date range (preset or fixed dates), comparison period, combo series, value colors, reference lines and bands, conditional formatting, title, layout and Style settings |
 | `add_control` | Drop-down, fixed-size list, input box, advanced filter, slider, checkbox, preset filter, date range, data control, dimension control, button (link to a URL or page, or a report action) |
