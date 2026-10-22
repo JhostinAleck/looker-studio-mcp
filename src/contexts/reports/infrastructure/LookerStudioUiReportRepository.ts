@@ -25,6 +25,11 @@ import type {
   ThemeSpec,
 } from '@/contexts/reports/domain/ReportRepository.js';
 import {
+  type ChartProblem,
+  type ReportCheck,
+  classifyChartError,
+} from '@/contexts/reports/domain/Report.js';
+import {
   type Aggregation,
   type BigQuerySource,
   type ChartSpec,
@@ -1945,5 +1950,78 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         await link.waitFor({ state: 'detached', timeout: this.opts.stepTimeoutMs });
       });
     });
+  }
+
+  // ── Report check ──
+
+  // Walks the pages in the editor (so indexes match list_components), waits
+  // for each page's charts and reads what they show instead of data.
+  async checkReport(
+    reportId: string,
+    opts: { page?: number; timeoutMs: number },
+  ): Promise<ReportCheck> {
+    return this.edit(reportId, async (editor) => {
+      const pages = opts.page ? [{ index: opts.page }] : await this.readPages(editor);
+      const problems: ChartProblem[] = [];
+      let components = 0;
+      for (const page of pages) {
+        await this.goToPage(editor, page.index);
+        const states = await editor.waitForCharts(opts.timeoutMs);
+        const where = {
+          page: page.index,
+          ...('name' in page && page.name ? { pageName: page.name } : {}),
+        };
+        for (const state of states.filter((s) => s.data)) {
+          components++;
+          const problem = state.loading
+            ? {
+                problem: 'loading' as const,
+                message: `Still loading after ${opts.timeoutMs / 1000} s`,
+              }
+            : state.error
+              ? {
+                  problem: classifyChartError(state.error.title),
+                  message: [state.error.title, state.error.description].filter(Boolean).join(': '),
+                }
+              : state.noData
+                ? { problem: 'no_data' as const, message: 'No data' }
+                : null;
+          if (!problem) continue;
+          // Details first: selecting the chart afterwards could land on its link.
+          const details = state.error?.hasDetails
+            ? await editor.errorDetails(state.index).catch(() => undefined)
+            : undefined;
+          const { kind, fields } = await this.describeForCheck(editor, state.index, state.type);
+          problems.push({
+            ...where,
+            index: state.index,
+            kind,
+            ...(state.title ? { title: state.title } : {}),
+            ...(fields.length ? { fields } : {}),
+            ...problem,
+            ...(details ? { details } : {}),
+          });
+        }
+        await editor.deselect();
+      }
+      return { pages, components, problems };
+    });
+  }
+
+  // Kind and Setup fields of a chart with a problem; the chart's header class
+  // stands in when it cannot be selected (covered by another component).
+  private async describeForCheck(
+    editor: LookerStudioEditor,
+    index: number,
+    type?: string,
+  ): Promise<{ kind: string; fields: string[] }> {
+    try {
+      const title = await editor.select(index);
+      const kind = title.replace(/ properties$/i, '');
+      const fields = await editor.setupFields().catch(() => []);
+      return { kind, fields };
+    } catch {
+      return { kind: type ?? 'chart', fields: [] };
+    }
   }
 }

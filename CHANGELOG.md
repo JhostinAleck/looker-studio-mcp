@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- New tool `check_report`: lists the charts of every page (or one page) that show "No data", configuration errors, data set errors (Too Many Rows, BigQuery query errors with their message) or are still loading, with page, index, kind, fields and the "See details" text.
 - Custom queries take `date_range_params` (`@DS_START_DATE`, `@DS_END_DATE`) and `viewer_email_param` (`@DS_USER_EMAIL`); the viewer email consent is given for the signed-in account. `build_report_link` refuses them: the Linking API has no parameter for them.
 - `create_report`, `add_data_source` and `build_report_link` dry-run a custom query in BigQuery first and return BigQuery's error without opening the browser; only a single SELECT is accepted.
 - `create_report`, `add_data_source` and `build_report_link` take a custom query: `sql` instead of `dataset_id` and `table_id`, with `project_id` as the billing project. `source_name` names the data source; without it Looker Studio names it after the first table in the query.

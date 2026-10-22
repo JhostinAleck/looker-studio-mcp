@@ -46,6 +46,7 @@ import { handleScreenshotReport } from './tools/screenshot-report.tool.js';
 import { handleSetTheme } from './tools/set-theme.tool.js';
 import { handleShareReport } from './tools/share-report.tool.js';
 import { handleUpdateComponent } from './tools/update-component.tool.js';
+import { handleCheckReport } from './tools/check-report.tool.js';
 
 export interface ToolDeps extends BigQueryToolDeps, ReportToolDeps, CheckAuthDeps, WriteDeps {}
 
@@ -416,6 +417,15 @@ const TOOLS: ToolDef[] = [
     schema: schemas.deleteReportSchema,
     write: true,
     run: handleDeleteReport,
+  },
+  {
+    name: 'check_report',
+    title: 'Check a report for broken charts',
+    description:
+      'Open every page of a report (or one page), wait for the charts to load and list the ones that show a problem instead of data: "No data", configuration errors (invalid or missing fields), data set errors (Too Many Rows, BigQuery query errors with their message), consent prompts, or still loading after timeout_seconds.\nGives page, component index, kind, title, fields and Looker\'s "See details" text. Use it after building or changing a report.',
+    schema: schemas.checkReportSchema,
+    write: false,
+    run: handleCheckReport,
   },
 ];
 

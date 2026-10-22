@@ -74,3 +74,6 @@ npm test             # vitest watch
 - Blends: the merge dialog pre-fills key pairs with the same field name; the join type buttons need a forced click.
 - Page visibility (Control visibility) is a dialog of three radios and Confirm.
 - When a repository call fails, a screenshot of the editor is saved as `error-<report>-<time>.png` in the screenshots folder.
+- Chart states: a loading chart shows `ng2-canvas-component-loading-shimmer`; an error is an `ng2-component-error` card (`.error-title`, `.error-description`, `a.more` "See details") whose dialog is an AngularJS `md-dialog.errorDialog` closed with OK; tables write "No data" in `.noData`. Charts and controls have a `.lego-component-header`, texts and shapes do not.
+- Custom query options: "Enable viewer email address parameter" opens a "Grant consent" dialog (Allow), and the report then asks once more for consent on its first load; until then charts show "Consent required".
+- In the data source editor the "Edit Connection" and "Reconnect" buttons have no matching accessible name: find them by text.

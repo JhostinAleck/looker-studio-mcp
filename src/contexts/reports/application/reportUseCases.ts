@@ -25,6 +25,7 @@ import {
   type ControlSpec,
   type FilterSpec,
   type Layout,
+  type ReportCheck,
   type ReportSummary,
   type StyleSettings,
   HEX_COLOR_RE,
@@ -500,4 +501,23 @@ export async function deleteReport(
     throw new ReportNameMismatchError(found?.name ?? null, confirmName);
   }
   await repo.deleteReport(id);
+}
+
+// ── Report check ──
+
+export async function checkReport(
+  repo: ReportRepository,
+  report: string,
+  opts: { page?: number; timeoutSeconds: number },
+): Promise<ReportCheck> {
+  if (
+    !Number.isInteger(opts.timeoutSeconds) ||
+    opts.timeoutSeconds < 5 ||
+    opts.timeoutSeconds > 300
+  )
+    throw new InvalidChartError('timeout_seconds must be a whole number between 5 and 300.');
+  return repo.checkReport(parseReportId(report), {
+    ...(opts.page ? { page: opts.page } : {}),
+    timeoutMs: opts.timeoutSeconds * 1000,
+  });
 }

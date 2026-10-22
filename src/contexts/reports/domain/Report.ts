@@ -600,3 +600,47 @@ export function validateSettings(settings: StyleSettings): StyleSettings {
   }
   return settings;
 }
+
+// ── Report check ──
+
+// What a chart shows instead of its data, sorted by who has to fix it.
+export type ChartProblemKind =
+  | 'no_data' // the query returned no rows (often a filter or date range)
+  | 'configuration' // the chart setup: invalid or missing fields
+  | 'data_set' // the data source or its query: BigQuery errors, too many rows
+  | 'consent' // the viewer has not allowed the viewer email parameter
+  | 'loading' // still loading when the check gave up
+  | 'error';
+
+export interface ChartProblem {
+  page: number;
+  pageName?: string;
+  // Component index on its page, as list_components gives it.
+  index: number;
+  kind: string;
+  title?: string;
+  fields?: string[];
+  problem: ChartProblemKind;
+  // The message on the chart, e.g. "Too Many Rows: Due to the number of rows…".
+  message: string;
+  // The "See details" dialog: Looker's explanation and, for queries, BigQuery's error.
+  details?: string;
+}
+
+export interface ReportCheck {
+  pages: Array<{ index: number; name?: string }>;
+  // Charts and controls looked at (texts, shapes and images have no data).
+  components: number;
+  problems: ChartProblem[];
+}
+
+// Sorts the title of a chart error into a problem kind.
+export function classifyChartError(title: string): ChartProblemKind {
+  const t = title.toLowerCase();
+  if (/no data/.test(t)) return 'no_data';
+  if (/consent/.test(t)) return 'consent';
+  if (/too many rows|data ?set|data source|system error|query|bigquery|user configuration/.test(t))
+    return 'data_set';
+  if (/invalid|configuration|missing|field|dimension|metric/.test(t)) return 'configuration';
+  return 'error';
+}

@@ -24,6 +24,7 @@ import { InfrastructureError } from '@/shared-kernel/errors/InfrastructureError.
 
 import { BASE, HL, SECTION, SEL, cssEscape, datePresetPath, escapeRegExp } from './selectors.js';
 import { CUSTOM_QUERY_OPTIONS } from './selectors.js';
+import { CHECK } from './selectors.js';
 
 export class EditorStepError extends InfrastructureError {
   readonly code = 'LOOKER_STUDIO_EDITOR';
@@ -48,6 +49,19 @@ export interface CanvasGeometry {
 
 // One row of the Setup panel: a chip with a field, or an "Add …" drop target,
 // under the section label it belongs to ("Dimension", "Metric", "Sort"…).
+// What a component of the canvas shows, read by check_report.
+export interface ComponentState {
+  index: number;
+  // Charts and controls; texts, shapes and images have no data.
+  data: boolean;
+  loading: boolean;
+  noData: boolean;
+  error?: { title: string; description: string; hasDetails: boolean };
+  title?: string;
+  // Header class of the chart, e.g. "simple-barchart": a kind when nothing better is known.
+  type?: string;
+}
+
 interface SetupSlot {
   section: string;
   kind: 'chip' | 'add';
@@ -1756,5 +1770,96 @@ export class LookerStudioEditor {
       if (!id) throw new Error('the report URL has no id');
       return id;
     });
+  }
+
+  // ── Report check ──
+
+  async componentStates(): Promise<ComponentState[]> {
+    return this.page.locator(`${SEL.canvas} ${SEL.component}`).evaluateAll((nodes, c) => {
+      const visible = (e: Element | null) => {
+        const r = e?.getBoundingClientRect();
+        return !!r && r.width > 0 && r.height > 0;
+      };
+      return nodes.map((node, index) => {
+        const header = node.querySelector(c.dataHeader);
+        const error = node.querySelector(c.error);
+        const title = node.querySelector(c.chartTitle)?.textContent?.trim();
+        const type = header?.className
+          .toString()
+          .split(/\s+/)
+          .find((k) => k && !k.startsWith('lego-'));
+        // Tables have their own "No data" row; other charts write it as text.
+        const noData =
+          !!node.querySelector(c.noData) ||
+          [...node.querySelectorAll('*')].some(
+            (e) => e.children.length === 0 && e.textContent?.trim() === c.noDataText && visible(e),
+          );
+        return {
+          index,
+          data: !!header,
+          loading: [...node.querySelectorAll(c.loading)].some(visible),
+          noData,
+          ...(error && visible(error)
+            ? {
+                error: {
+                  title: error.querySelector(c.errorTitle)?.textContent?.trim() ?? '',
+                  description: error.querySelector(c.errorDescription)?.textContent?.trim() ?? '',
+                  hasDetails: !!error.querySelector(c.detailsLink),
+                },
+              }
+            : {}),
+          ...(title ? { title } : {}),
+          ...(type ? { type } : {}),
+        };
+      });
+    }, CHECK);
+  }
+
+  // Polls until no chart shows its loading shimmer, or the time is up.
+  async waitForCharts(timeoutMs: number): Promise<ComponentState[]> {
+    const deadline = Date.now() + timeoutMs;
+    // Charts start loading a moment after the canvas is drawn.
+    await sleep(1500);
+    for (;;) {
+      const states = await this.componentStates();
+      if (!states.some((s) => s.loading) || Date.now() > deadline) return states;
+      await sleep(500);
+    }
+  }
+
+  // Opens the "See details" dialog of a chart error and returns its text
+  // (Looker's message, the BigQuery error, the error id), then closes it.
+  async errorDetails(index: number): Promise<string | undefined> {
+    const link = this.component(index).locator(`${CHECK.error} ${CHECK.detailsLink}`).first();
+    if (!(await link.count())) return undefined;
+    await link.click();
+    const dialog = this.page.locator(CHECK.errorDialog).last();
+    if (
+      !(await dialog.waitFor({ timeout: 5_000 }).then(
+        () => true,
+        () => false,
+      ))
+    )
+      return undefined;
+    const parts = await dialog
+      .locator(CHECK.dialogParts)
+      .evaluateAll((nodes) =>
+        nodes.map((n) => (n.textContent ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean),
+      );
+    await dialog
+      .getByRole('button', { name: /^ok$/i })
+      .click()
+      .catch(() => this.page.keyboard.press('Escape'));
+    await dialog.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => undefined);
+    return [...new Set(parts)].join(' / ') || undefined;
+  }
+
+  // Fields in the Setup slots of the selected component, as "Slot: field".
+  async setupFields(): Promise<string[]> {
+    await this.openTab('Setup');
+    const slots = await this.setupSlots();
+    return slots
+      .filter((s) => s.kind === 'chip' && s.field)
+      .map((s) => (s.section ? `${s.section}: ${s.field}` : s.field!));
   }
 }

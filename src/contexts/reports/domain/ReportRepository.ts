@@ -1,5 +1,6 @@
 import type {
   BigQuerySource,
+  ReportCheck,
   ButtonSpec,
   ChartSpec,
   ChartType,
@@ -296,4 +297,8 @@ export interface ReportRepository {
   // PNG of the report in view mode; returns the saved file path.
   screenshot(reportId: string, page?: number): Promise<string>;
   deleteReport(reportId: string): Promise<void>;
+  // ── Report check ──
+  // Waits up to `timeoutMs` per page for the charts to load and reports what
+  // each one shows instead of data. Every page unless `page` is given.
+  checkReport(reportId: string, opts: { page?: number; timeoutMs: number }): Promise<ReportCheck>;
 }

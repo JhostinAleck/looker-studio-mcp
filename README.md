@@ -98,6 +98,7 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `describe_component` | Every Setup/Style setting of a component with its exact label and value |
 | `screenshot_report` | PNG of a page in view mode, returned as an image |
 | `build_report_link` | A Linking API URL that creates a report from BigQuery tables or custom queries |
+| `check_report` | Every chart of a report (or a page) that shows "No data", a configuration error, a data set error (Too Many Rows, BigQuery errors) or is still loading, with page, index, kind, fields and Looker's details ([docs](docs/check-report.md)) |
 
 ### Write tools (require writes)
 
@@ -163,6 +164,7 @@ See [docs/design-guide.md](docs/design-guide.md) for the canvas grid, the card p
 - Filter values are typed as free text (the editor's value suggestions are turned off), so a value that is not in the data is accepted: check the spelling. "In" takes its values comma separated.
 - Custom queries: always pass `source_name` and cast columns whose type Looker Studio may guess wrong. The automatic dry run catches unknown columns and syntax errors, not errors that only happen when the query runs ([details](docs/custom-queries.md)).
 - `build_report_link` cannot enable date range or viewer email parameters: the Linking API has no parameter for them.
+- `check_report` opens the editor, so it needs edit access, and reads the English messages of Looker Studio.
 - Community visualizations are not covered: they need a third-party component URL and its own permission prompt.
 - `share_report` opens a visible Chrome window for a few seconds: Google refuses invitations sent from a headless browser. It sends one invitation per address, since a batch fails with "An unknown error occurred".
 

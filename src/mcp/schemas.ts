@@ -742,3 +742,20 @@ export const createBlendSchema = z.object({
     )
     .describe('One per table after the first'),
 });
+
+export const checkReportSchema = z.object({
+  report_id: reportId,
+  page: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('1-based page to check; every page when omitted'),
+  timeout_seconds: z
+    .number()
+    .int()
+    .min(5)
+    .max(300)
+    .default(30)
+    .describe('How long to wait per page for charts to load before reporting them as loading'),
+});
