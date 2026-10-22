@@ -98,6 +98,7 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `describe_component` | Every Setup/Style setting of a component with its exact label and value |
 | `screenshot_report` | PNG of a page in view mode, returned as an image |
 | `build_report_link` | A Linking API URL that creates a report from BigQuery tables or custom queries |
+| `export_report_spec` | Read a report into a JSON spec (theme, data sources, pages, components with fields and main style) that `apply_report_spec` rebuilds |
 
 ### Write tools (require writes)
 
@@ -126,12 +127,18 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `set_theme` | Built-in theme, custom theme settings, page size, Layout settings (tab navigation, header) |
 | `share_report` | Invite several people at once as viewers or editors; existing access is changed in place |
 | `add_page`, `rename_page`, `manage_page`, `rename_report`, `delete_report` | Report management; `manage_page` deletes, duplicates, hides/shows and reorders pages |
+| `apply_actions` | Run a list of editing actions (any of the tools above, same arguments) in one editor visit: validated first, a result per action |
+| `apply_report_spec` | Build a report from a JSON spec, or add the missing pages and components to an existing one, in one visit |
 
 Settings are addressed by the **label the properties panel shows** (`"Bar color"`, `"Show data labels"`, `"Border radius"`…). `describe_component` lists them; settings that do not exist come back as warnings instead of failing silently.
 
 ## Custom queries
 
 `create_report`, `add_data_source` and `build_report_link` take `sql` instead of `dataset_id` and `table_id`; `project_id` is then the billing project and `source_name` names the data source. The data source then works like any other. See [docs/custom-queries.md](docs/custom-queries.md) for naming, field types, validation and cost.
+
+## Batches and report specs
+
+Each editing tool opens the report, does its work and closes it. `apply_actions` runs many of them in one editor visit, several times faster: `{"report_id": "…", "actions": [{"tool": "add_text", "args": {"text": "Title"}}, …]}`. `export_report_spec` and `apply_report_spec` read a report into JSON and build one from it (copies, templates, dashboards written by hand). See [docs/report-spec.md](docs/report-spec.md).
 
 ## Designing dashboards
 

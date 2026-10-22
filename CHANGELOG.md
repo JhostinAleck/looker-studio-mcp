@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- New tool `apply_actions`: runs a list of editing actions in one editor visit, validated before the browser opens, with a result per action.
+- New tool `export_report_spec`: reads a report (theme, data sources, pages, components) into a JSON spec.
+- New tool `apply_report_spec`: builds a report from a spec, or adds the missing pages and components to an existing one (docs/report-spec.md).
 - `create_report`, `add_data_source` and `build_report_link` take a custom query: `sql` instead of `dataset_id` and `table_id`, with `project_id` as the billing project. `source_name` names the data source; without it Looker Studio names it after the first table in the query.
 - Filters take several clauses (`clauses`: AND groups of OR clauses). Filter values are typed with the editor's suggestions off: with them on, a typed value that the editor could not suggest was dropped and the filter was saved empty.
 - `date_range` takes fixed dates (`2026-10-01..2026-10-15`).
