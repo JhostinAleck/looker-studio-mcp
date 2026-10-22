@@ -74,3 +74,6 @@ npm test             # vitest watch
 - Blends: the merge dialog pre-fills key pairs with the same field name; the join type buttons need a forced click.
 - Page visibility (Control visibility) is a dialog of three radios and Confirm.
 - When a repository call fails, a screenshot of the editor is saved as `error-<report>-<time>.png` in the screenshots folder.
+- Manage added data sources: the Type chip (Embedded/Reusable) has no cell of its own, so row cells are told apart by content; the alias is the last cell. Remove asks "You are removing a data source" (also when charts use it: they are left broken).
+- Data source editor: changes only stick after Done. Edit Connection's Cancel closes the whole editor, back to the Data sources panel. Field type and aggregation menus are AngularJS md-menus (submenus open on hover); closed ones stay in the DOM. Aggregation has no menu for Text or Date fields. Data freshness is an md-dialog, credentials a mat-dialog.
+- Viewer's credentials make every editor visit open "Grant consent" over the editor; the data source tools decline it.

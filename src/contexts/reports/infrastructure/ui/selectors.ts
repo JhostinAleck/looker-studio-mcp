@@ -1,3 +1,4 @@
+import type { FieldAggregation, Freshness } from '@/contexts/reports/domain/DataSource.js';
 import type { ChartType, ControlKind } from '@/contexts/reports/domain/Report.js';
 import type {
   ArrangeAction,
@@ -348,3 +349,47 @@ export const SEL = {
 export function cssEscape(value: string): string {
   return value.replace(/["\\]/g, '\\$&');
 }
+
+// ── data sources ──
+// The data source editor: header buttons, field rows and the connection page.
+export const DATA_SOURCE = {
+  credentialsButton: 'Change datasource credentials',
+  freshnessButton: /^Data freshness/,
+  editConnection: 'Go back',
+  // A field row; its name is a contenteditable label.
+  fieldRow: 'concept-field-entry',
+  fieldName: '#datasource-field-name [contenteditable]',
+  typeColumn: '.column.type',
+  aggregationColumn: '.column.aggregation',
+  typeDropdown: 'Dropdown to select field type',
+  aggregationDropdown: 'Dropdown to select aggregation',
+  // The field list's own search box (the Data panel has another).
+  searchFields: 'Search fields',
+  // The field type and aggregation menus are AngularJS md-menus.
+  openMenu: '.md-open-menu-container',
+  // The Data freshness dialog is an AngularJS md-dialog, not a mat-dialog.
+  freshnessDialog: 'md-dialog.set-query-cache-policy-dialog',
+  selectedOption: 'ng2-config-column-item:has(.list-option.selected) a[href]',
+} as const;
+
+export const FRESHNESS_LABEL: Record<Freshness, string> = {
+  '15 minutes': 'Every 15 minutes',
+  '1 hour': 'Every hour',
+  '4 hours': 'Every 4 hours',
+  '12 hours': 'Every 12 hours',
+};
+
+export const CREDENTIALS_LABEL = { owner: "Owner's Credentials", viewer: "Viewer's Credentials" };
+
+export const FIELD_AGGREGATION_LABEL: Record<FieldAggregation, string> = {
+  none: 'None',
+  sum: 'Sum',
+  avg: 'Average',
+  count: 'Count',
+  count_distinct: 'Count Distinct',
+  min: 'Min',
+  max: 'Max',
+  median: 'Median',
+  std_dev: 'Standard Deviation',
+  variance: 'Variance',
+};

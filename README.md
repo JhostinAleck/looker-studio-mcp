@@ -98,6 +98,7 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `describe_component` | Every Setup/Style setting of a component with its exact label and value |
 | `screenshot_report` | PNG of a page in view mode, returned as an image |
 | `build_report_link` | A Linking API URL that creates a report from BigQuery tables or custom queries |
+| `list_data_sources` | Data sources of a report: name, alias (ds0…), table or custom query SQL, charts using it, data credentials, data freshness; `fields: true` adds each field's type and aggregation |
 
 ### Write tools (require writes)
 
@@ -126,12 +127,15 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `set_theme` | Built-in theme, custom theme settings, page size, Layout settings (tab navigation, header) |
 | `share_report` | Invite several people at once as viewers or editors; existing access is changed in place |
 | `add_page`, `rename_page`, `manage_page`, `rename_report`, `delete_report` | Report management; `manage_page` deletes, duplicates, hides/shows and reorders pages |
+| `remove_data_source` | Remove a data source by name or alias; refuses while charts use it unless `force: true` |
+| `update_data_source` | Rename a data source, replace a custom query's SQL, set data credentials (`owner`/`viewer`) and data freshness (`15 minutes` to `12 hours`) |
+| `update_field` | Change a data source field's type (Number, Text, Date…), default aggregation and/or name |
 
 Settings are addressed by the **label the properties panel shows** (`"Bar color"`, `"Show data labels"`, `"Border radius"`…). `describe_component` lists them; settings that do not exist come back as warnings instead of failing silently.
 
 ## Custom queries
 
-`create_report`, `add_data_source` and `build_report_link` take `sql` instead of `dataset_id` and `table_id`; `project_id` is then the billing project and `source_name` names the data source. The data source then works like any other. See [docs/custom-queries.md](docs/custom-queries.md) for naming, field types, validation and cost.
+`create_report`, `add_data_source` and `build_report_link` take `sql` instead of `dataset_id` and `table_id`; `project_id` is then the billing project and `source_name` names the data source. The data source then works like any other; `list_data_sources` shows its SQL and field types, `update_data_source` replaces the SQL in place and `update_field` fixes a field typed wrong. See [docs/custom-queries.md](docs/custom-queries.md) for naming, field types, validation and cost.
 
 ## Designing dashboards
 

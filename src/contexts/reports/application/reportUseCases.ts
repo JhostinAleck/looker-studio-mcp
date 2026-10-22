@@ -38,6 +38,15 @@ import {
   validateLayout,
   validateSettings,
 } from '@/contexts/reports/domain/Report.js';
+import {
+  type DataSourceChange,
+  type DataSourceField,
+  type DataSourceInfo,
+  type DataSourceRow,
+  type FieldChange,
+  validateDataSourceChange,
+  validateFieldChange,
+} from '@/contexts/reports/domain/DataSource.js';
 import { DomainError } from '@/shared-kernel/errors/DomainError.js';
 
 export class ReportNameMismatchError extends DomainError {
@@ -500,4 +509,49 @@ export async function deleteReport(
     throw new ReportNameMismatchError(found?.name ?? null, confirmName);
   }
   await repo.deleteReport(id);
+}
+
+// ── data sources ──
+
+export async function listDataSources(
+  repo: ReportRepository,
+  report: string,
+  opts: { ref?: string; fields?: boolean } = {},
+): Promise<DataSourceInfo[]> {
+  const ref = opts.ref?.trim();
+  return repo.listDataSources(parseReportId(report), {
+    ...(ref ? { ref } : {}),
+    fields: opts.fields ?? false,
+  });
+}
+
+export async function removeDataSource(
+  repo: ReportRepository,
+  report: string,
+  ref: string,
+  force = false,
+): Promise<DataSourceRow> {
+  if (!ref.trim()) throw new InvalidChartError('Name the data source (name or alias).');
+  return repo.removeDataSource(parseReportId(report), ref.trim(), force);
+}
+
+export async function updateDataSource(
+  repo: ReportRepository,
+  report: string,
+  ref: string,
+  change: DataSourceChange,
+): Promise<string[]> {
+  if (!ref.trim()) throw new InvalidChartError('Name the data source (name or alias).');
+  return repo.updateDataSource(parseReportId(report), ref.trim(), validateDataSourceChange(change));
+}
+
+export async function updateField(
+  repo: ReportRepository,
+  report: string,
+  field: string,
+  change: FieldChange,
+  ref?: string,
+): Promise<DataSourceField> {
+  const checked = validateFieldChange(field, change);
+  return repo.updateField(parseReportId(report), ref?.trim() || undefined, field.trim(), checked);
 }

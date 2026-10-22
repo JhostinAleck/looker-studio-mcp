@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- New tool `list_data_sources`: name, alias, connector, table or custom query SQL, charts using it, data credentials and freshness of every data source; `fields: true` lists field types and aggregations.
+- New tool `remove_data_source`: removes a data source by name or alias, refusing while charts use it unless `force: true`.
+- New tool `update_data_source`: renames a data source, replaces a custom query's SQL (Reconnect), sets data credentials and data freshness.
+- New tool `update_field`: changes a field's type, default aggregation or name in the data source editor (e.g. a `COUNT(*)` column typed as Date).
 - `create_report`, `add_data_source` and `build_report_link` take a custom query: `sql` instead of `dataset_id` and `table_id`, with `project_id` as the billing project. `source_name` names the data source; without it Looker Studio names it after the first table in the query.
 - Filters take several clauses (`clauses`: AND groups of OR clauses). Filter values are typed with the editor's suggestions off: with them on, a typed value that the editor could not suggest was dropped and the filter was saved empty.
 - `date_range` takes fixed dates (`2026-10-01..2026-10-15`).

@@ -46,6 +46,10 @@ import { handleScreenshotReport } from './tools/screenshot-report.tool.js';
 import { handleSetTheme } from './tools/set-theme.tool.js';
 import { handleShareReport } from './tools/share-report.tool.js';
 import { handleUpdateComponent } from './tools/update-component.tool.js';
+import { handleListDataSources } from './tools/list-data-sources.tool.js';
+import { handleRemoveDataSource } from './tools/remove-data-source.tool.js';
+import { handleUpdateDataSource } from './tools/update-data-source.tool.js';
+import { handleUpdateField } from './tools/update-field.tool.js';
 
 export interface ToolDeps extends BigQueryToolDeps, ReportToolDeps, CheckAuthDeps, WriteDeps {}
 
@@ -416,6 +420,42 @@ const TOOLS: ToolDef[] = [
     schema: schemas.deleteReportSchema,
     write: true,
     run: handleDeleteReport,
+  },
+  {
+    name: 'list_data_sources',
+    title: 'List data sources',
+    description:
+      'Every data source of a report: name, alias (ds0, ds1…), connector, table or custom query SQL, how many charts use it, data credentials and freshness.\nfields: true also lists each field with its type and default aggregation (check custom queries: Looker Studio can guess a type wrong).',
+    schema: schemas.listDataSourcesSchema,
+    write: false,
+    run: handleListDataSources,
+  },
+  {
+    name: 'remove_data_source',
+    title: 'Remove a data source',
+    description:
+      'Remove a data source from a report, by name or alias. Refuses while charts use it unless force is true (Looker Studio would leave them broken).',
+    schema: schemas.removeDataSourceSchema,
+    write: true,
+    run: handleRemoveDataSource,
+  },
+  {
+    name: 'update_data_source',
+    title: 'Update a data source',
+    description:
+      "Change a data source in place: rename it, replace a custom query's SQL (Reconnect), set data credentials (owner or viewer) and data freshness (15 minutes to 12 hours).",
+    schema: schemas.updateDataSourceSchema,
+    write: true,
+    run: handleUpdateDataSource,
+  },
+  {
+    name: 'update_field',
+    title: 'Update a data source field',
+    description:
+      'Change the type (Number, Text, Date…), default aggregation and/or name of a field in the data source editor, e.g. a COUNT(*) column of a custom query that came in as a Date.',
+    schema: schemas.updateFieldSchema,
+    write: true,
+    run: handleUpdateField,
   },
 ];
 
