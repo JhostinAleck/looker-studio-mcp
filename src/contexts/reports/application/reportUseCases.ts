@@ -12,6 +12,8 @@ import type {
   PlaceOptions,
   ReportPage,
   ReportRepository,
+  ReportSnapshot,
+  StyleDepth,
   ScopeSettings,
   ShapeSpec,
   TextSpec,
@@ -500,4 +502,30 @@ export async function deleteReport(
     throw new ReportNameMismatchError(found?.name ?? null, confirmName);
   }
   await repo.deleteReport(id);
+}
+
+// ── Batch ──
+
+// Runs `work` in one editor visit of the report; `work` gets the parsed id.
+export async function inOneVisit<T>(
+  repo: ReportRepository,
+  report: string,
+  work: (reportId: string) => Promise<T>,
+): Promise<T> {
+  const id = parseReportId(report);
+  return repo.inOneVisit(id, () => work(id));
+}
+
+// ── Report specs ──
+
+export async function readReport(
+  repo: ReportRepository,
+  report: string,
+  style: StyleDepth = 'main',
+): Promise<ReportSnapshot> {
+  return repo.readReport(parseReportId(report), style);
+}
+
+export async function listDataSources(repo: ReportRepository, report: string): Promise<string[]> {
+  return repo.listDataSources(parseReportId(report));
 }

@@ -348,3 +348,42 @@ export const SEL = {
 export function cssEscape(value: string): string {
   return value.replace(/["\\]/g, '\\$&');
 }
+
+// ── Report specs ───────────────────────────────────────────────────────
+
+// Style settings a spec keeps by default ("main"): how the component's card looks.
+export const MAIN_STYLE = [
+  'Background',
+  'Border color',
+  'Border radius',
+  'Border weight',
+  'Opacity',
+  'Add border shadow',
+  'Show data labels',
+  'Display legend',
+];
+
+// Values of MAIN_STYLE that every new component already has: not worth re-applying.
+export const MAIN_STYLE_NEUTRAL: Record<string, string | boolean> = {
+  Opacity: '100%',
+  'Border weight': 'None',
+  'Add border shadow': false,
+};
+
+// Properties panel titles of the components that are neither charts nor controls.
+export const PANEL_KIND = {
+  text: /^Text\b/,
+  shape: /^Shape\b/,
+  image: /^Image\b/,
+  line: /^Line properties$/,
+  embed: /embed/i,
+} as const;
+
+// Setup sections a chart spec does not copy as extra `fields`: they are read
+// into dimensions, metrics, breakdown and sort, or Looker Studio fills them itself.
+export const SPEC_SKIPPED_SECTIONS =
+  /^(Data source|Dimension|Row dimension|Metric|Primary field|Breakdown dimension|Sort( #\d+)?|Secondary sort|Date range dimension|Default date range|Filter|Row #\d+|Column #\d+)/i;
+
+// Setup sections whose chips are opened to read their source field and aggregation.
+export const SPEC_DETAILED_SECTIONS =
+  /^(Dimension|Row dimension|Column dimension|Metric|Primary field|Breakdown dimension|Control field)/i;

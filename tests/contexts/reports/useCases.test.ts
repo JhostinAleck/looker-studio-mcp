@@ -69,6 +69,9 @@ function fakeRepo(): ReportRepository {
     shareReport: vi.fn(async () => undefined),
     screenshot: vi.fn(),
     deleteReport: vi.fn(async () => undefined),
+    inOneVisit: vi.fn(async (_id: string, work: () => Promise<unknown>) => work()) as never,
+    listDataSources: vi.fn(async () => []),
+    readReport: vi.fn(),
   };
 }
 

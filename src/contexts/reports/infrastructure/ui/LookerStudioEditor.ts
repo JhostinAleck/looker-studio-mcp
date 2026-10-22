@@ -1,4 +1,4 @@
-import type { Locator, Page } from 'playwright';
+import type { Locator, Page, Request } from 'playwright';
 
 import type {
   BigQuerySource,
@@ -21,7 +21,17 @@ import {
 type FilterClauseInput = FilterClause;
 import { InfrastructureError } from '@/shared-kernel/errors/InfrastructureError.js';
 
-import { BASE, HL, SECTION, SEL, cssEscape, datePresetPath, escapeRegExp } from './selectors.js';
+import {
+  BASE,
+  HL,
+  PRESET_ORDER,
+  SECTION,
+  SEL,
+  cssEscape,
+  datePresetPath,
+  escapeRegExp,
+  sectionNamed,
+} from './selectors.js';
 
 export class EditorStepError extends InfrastructureError {
   readonly code = 'LOOKER_STUDIO_EDITOR';
@@ -109,7 +119,8 @@ export class LookerStudioEditor {
 
   // Waits for the editor to finish the network work of the last action (autosave included).
   async settle(ms = 800): Promise<void> {
-    await this.page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
+    if (this.network) await this.networkQuiet(5_000);
+    else await this.page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
     await sleep(ms);
   }
 
@@ -1699,5 +1710,221 @@ export class LookerStudioEditor {
       if (!id) throw new Error('the report URL has no id');
       return id;
     });
+  }
+
+  // ── Batch: network quiet ───────────────────────────────────────────────
+
+  private network: { last: number; inflight: Set<Request> } | null = null;
+
+  // The editor keeps a Firestore listen channel open, so 'networkidle' never
+  // comes and every settle() waited its whole 5 s timeout. Once tracked, the
+  // wait ends when no request has started or finished for 500 ms.
+  trackNetwork(): void {
+    if (this.network) return;
+    const network = { last: Date.now(), inflight: new Set<Request>() };
+    const longLived = (r: Request) => /firestore\.googleapis\.com.*\/Listen\//.test(r.url());
+    this.page.on('request', (r) => {
+      if (longLived(r)) return;
+      network.inflight.add(r);
+      network.last = Date.now();
+    });
+    const done = (r: Request) => {
+      if (network.inflight.delete(r)) network.last = Date.now();
+    };
+    this.page.on('requestfinished', done);
+    this.page.on('requestfailed', done);
+    this.network = network;
+  }
+
+  private async networkQuiet(timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const n = this.network!;
+      if (n.inflight.size === 0 && Date.now() - n.last >= 500) return;
+      await sleep(100);
+    }
+  }
+
+  // ── Report specs: reading the editor ───────────────────────────────────
+
+  async reportName(): Promise<string> {
+    return ((await this.page.locator('.ng2-editable-label').first().textContent()) ?? '').trim();
+  }
+
+  // The chips of every Setup section of the selected component, section by
+  // section (chip lists are virtual-scrolled). Chips of sections matching
+  // `detail` are opened to read their source field and aggregation.
+  async readSetupChips(detail: RegExp): Promise<
+    Array<{
+      section: string;
+      fields: Array<{ name: string; source?: string; aggregation?: string }>;
+    }>
+  > {
+    await this.openTab('Setup');
+    const labels = await this.page
+      .locator(SEL.propertiesPanel)
+      .first()
+      .evaluate((panel) => [
+        ...new Set(
+          [
+            ...panel.querySelectorAll(
+              '.lego-chip-list-container > label, properties-panel-section h4.section-label',
+            ),
+          ]
+            .map((l) => l.textContent?.trim() ?? '')
+            .filter(Boolean),
+        ),
+      ]);
+    const out: Array<{
+      section: string;
+      fields: Array<{ name: string; source?: string; aggregation?: string }>;
+    }> = [];
+    for (const section of labels) {
+      await this.revealSection(sectionNamed(section));
+      const chips = (await this.setupSlots()).filter(
+        (s) => s.kind === 'chip' && s.section === section && s.field,
+      );
+      if (!chips.length) continue;
+      const fields: Array<{ name: string; source?: string; aggregation?: string }> = [];
+      for (const chip of chips) {
+        const name = chip.field!;
+        fields.push(detail.test(section) ? { name, ...(await this.readChip(chip)) } : { name });
+      }
+      out.push({ section, fields });
+    }
+    return out;
+  }
+
+  // The field editor of a chip says "Source field: …" and shows its aggregation.
+  private async readChip(chip: SetupSlot): Promise<{ source?: string; aggregation?: string }> {
+    await this.page.mouse.click(chip.rect.x + 12, chip.rect.y + chip.rect.height / 2);
+    const opened = await this.page
+      .locator('.cdk-overlay-container input')
+      .first()
+      .waitFor({ timeout: 3_000 })
+      .then(
+        () => true,
+        () => false,
+      );
+    if (!opened) return {};
+    await sleep(300);
+    const text = await this.page.locator('.cdk-overlay-container').innerText();
+    await this.closeOverlay();
+    const source = /Source field:\s*(.+)/.exec(text)?.[1]?.trim();
+    const aggregation = /\bAggregation\s*\n+\s*([^\n]+)/.exec(text)?.[1]?.trim();
+    return { ...(source ? { source } : {}), ...(aggregation ? { aggregation } : {}) };
+  }
+
+  // The preset the selected chart uses: the highlighted one of the "Chart types" grid.
+  async selectedPreset(): Promise<string | null> {
+    const panel = this.page.locator(SEL.propertiesPanel);
+    const grid = this.page.locator('properties-panel preset-preview');
+    const shown = await grid
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (!shown) {
+      const toggle = panel.getByText('Chart types', { exact: true }).first();
+      if (!(await toggle.count())) return null;
+      if (
+        !(await toggle.click({ timeout: 3_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        return null;
+      await sleep(800);
+    }
+    const at = await grid.evaluateAll((els) =>
+      els.findIndex((e) => e.closest('button')?.classList.contains('selected')),
+    );
+    if (!shown)
+      await panel
+        .getByText('Chart types', { exact: true })
+        .first()
+        .click({ timeout: 3_000 })
+        .catch(() => undefined);
+    return at >= 0 ? (PRESET_ORDER[at] ?? null) : null;
+  }
+
+  // What the canvas itself shows of a component: its text and how it is
+  // drawn, the image or page it shows, the ends of a line (report px).
+  async readComponentDom(index: number): Promise<{
+    text: string;
+    fontSize?: number;
+    color?: string;
+    bold?: boolean;
+    align?: string;
+    image?: string;
+    embed?: string;
+    line?: { x1: number; y1: number; x2: number; y2: number };
+  }> {
+    const g = await this.geometry();
+    return this.component(index).evaluate((c, scale) => {
+      const leaf = [...c.querySelectorAll<HTMLElement>('*')].find(
+        (e) => e.children.length === 0 && e.textContent?.trim(),
+      );
+      const css = leaf ? getComputedStyle(leaf) : null;
+      const block = leaf?.closest<HTMLElement>('p, div') ?? leaf;
+      const line = c.querySelector('svg line');
+      const box = c.getBoundingClientRect();
+      const lineBox = line?.getBoundingClientRect();
+      const img = c.querySelector('img')?.getAttribute('src') ?? undefined;
+      const embed = c.querySelector('iframe')?.getAttribute('src') ?? undefined;
+      return {
+        text: (c as HTMLElement).innerText.trim(),
+        ...(css
+          ? {
+              fontSize: Math.round(parseFloat(css.fontSize)),
+              color: css.color,
+              bold: Number(css.fontWeight) >= 600,
+              align: block ? getComputedStyle(block).textAlign : css.textAlign,
+            }
+          : {}),
+        ...(img ? { image: img } : {}),
+        ...(embed ? { embed } : {}),
+        ...(line && lineBox
+          ? {
+              line: {
+                x1: Number(line.getAttribute('x1')) || (lineBox.x - box.x) / scale,
+                y1: Number(line.getAttribute('y1')) || (lineBox.y - box.y) / scale,
+                x2: Number(line.getAttribute('x2')) || (lineBox.right - box.x) / scale,
+                y2: Number(line.getAttribute('y2')) || (lineBox.bottom - box.y) / scale,
+              },
+            }
+          : {}),
+      };
+    }, g.scale);
+  }
+
+  async closePopup(): Promise<void> {
+    const backdrop = this.page.locator('.popup-backdrop').first();
+    if (await backdrop.isVisible().catch(() => false)) {
+      await backdrop.click({ force: true }).catch(() => undefined);
+      await sleep(400);
+    }
+  }
+
+  // The value shown by the first drop-down of the panel (a shape's kind).
+  async firstSelectValue(): Promise<string | null> {
+    const select = this.page.locator(`${SEL.propertiesPanel} mat-select`).first();
+    if (!(await select.count())) return null;
+    return ((await select.textContent().catch(() => null)) ?? '').trim() || null;
+  }
+
+  // The data source picker at the top of the Setup tab.
+  async chartDataSource(): Promise<string | null> {
+    await this.openTab('Setup');
+    return this.page
+      .locator(SEL.propertiesPanel)
+      .first()
+      .evaluate((panel) => {
+        const heading = [...panel.querySelectorAll('h4.section-label, .section-label')].find(
+          (h) => h.textContent?.trim() === 'Data source',
+        );
+        const section = heading?.closest('properties-panel-section') ?? heading?.parentElement;
+        const value = section?.querySelector('.mat-mdc-select-value, [role=combobox], button');
+        return value?.textContent?.trim() || null;
+      });
   }
 }

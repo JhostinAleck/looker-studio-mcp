@@ -5,6 +5,7 @@ import type {
   ChartType,
   ComponentDetails,
   ComponentInfo,
+  ControlKind,
   ControlSpec,
   DataSettings,
   FilterSpec,
@@ -296,4 +297,59 @@ export interface ReportRepository {
   // PNG of the report in view mode; returns the saved file path.
   screenshot(reportId: string, page?: number): Promise<string>;
   deleteReport(reportId: string): Promise<void>;
+
+  // ── Batch ──
+  // Runs `work` with every call for `reportId` inside it sharing one editor visit.
+  inOneVisit<T>(reportId: string, work: () => Promise<T>): Promise<T>;
+
+  // ── Report specs ──
+  listDataSources(reportId: string): Promise<string[]>;
+  // Reads the whole report back (read only): pages, components, data sources.
+  readReport(reportId: string, style: StyleDepth): Promise<ReportSnapshot>;
 }
+
+// ── Report specs ──
+
+// A report as the editor shows it, read back by ReportRepository.readReport.
+// Fields the editor did not show are left out.
+
+export type ComponentSnapshot =
+  | { kind: 'chart'; layout: Layout; chart: ChartSpec; dataSource?: string; style?: StyleSettings }
+  | { kind: 'text'; layout: Layout; text: TextSpec; style?: StyleSettings }
+  | { kind: 'shape'; layout: Layout; shape: ShapeSpec; style?: StyleSettings }
+  | {
+      kind: 'control';
+      layout: Layout;
+      control: ControlKind;
+      field?: string;
+      metric?: string;
+      dataSource?: string;
+      style?: StyleSettings;
+    }
+  | { kind: 'image'; layout: Layout; url?: string; style?: StyleSettings }
+  | { kind: 'line'; layout: Layout; from: { x: number; y: number }; to: { x: number; y: number } }
+  | { kind: 'embed'; layout: Layout; url?: string; style?: StyleSettings }
+  // Anything else (a blend chart, a community visualization…): kept as its panel title.
+  | { kind: 'other'; layout: Layout; panel: string };
+
+export interface DataSourceSnapshot {
+  name: string;
+  // Missing when the connection could not be read (not BigQuery, no access…).
+  source?: BigQuerySource;
+}
+
+export interface PageSnapshot {
+  name: string;
+  components: ComponentSnapshot[];
+}
+
+export interface ReportSnapshot {
+  name: string;
+  theme?: string;
+  canvas?: { width: number; height: number };
+  dataSources: DataSourceSnapshot[];
+  pages: PageSnapshot[];
+}
+
+// How much of each component's Style tab readReport keeps.
+export type StyleDepth = 'none' | 'main' | 'all';

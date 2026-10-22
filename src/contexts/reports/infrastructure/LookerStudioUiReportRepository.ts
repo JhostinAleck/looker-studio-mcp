@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -7,6 +8,10 @@ import type { BrowserSession } from '@/contexts/authentication/domain/BrowserSes
 import type {
   ArrangeAction,
   BinFieldSpec,
+  ComponentSnapshot,
+  DataSourceSnapshot,
+  ReportSnapshot,
+  StyleDepth,
   BlendSpec,
   CalculatedFieldSpec,
   ComponentChange,
@@ -30,6 +35,9 @@ import {
   type ChartSpec,
   type ChartType,
   type ComponentDetails,
+  type ControlKind,
+  type MetricSpec,
+  type SettingInfo,
   type ComponentInfo,
   type ControlSpec,
   type DataSettings,
@@ -38,6 +46,7 @@ import {
   type Layout,
   type ReportSummary,
   type StyleSettings,
+  cssColorToHex,
   filterClauses,
   isQuerySource,
   reportUrl,
@@ -52,12 +61,17 @@ import {
   CONTROL_LABELS,
   FILTER_CONDITIONS,
   HL,
+  MAIN_STYLE,
+  MAIN_STYLE_NEUTRAL,
   PAGE_MENU,
+  PANEL_KIND,
   PANEL_TITLE_HINT,
   PRESET_ORDER,
   SECTION,
   SEL,
   SHAPE_PATHS,
+  SPEC_DETAILED_SECTIONS,
+  SPEC_SKIPPED_SECTIONS,
   cssEscape,
   sectionNamed,
 } from './ui/selectors.js';
@@ -93,9 +107,20 @@ const DEFAULT_SIZE: Record<string, { width: number; height: number }> = {
   text: { width: 400, height: 50 },
 };
 
+// An editor kept open by inOneVisit for the calls made inside it.
+interface EditorVisit {
+  reportId: string;
+  editor: LookerStudioEditor;
+  restores: Array<() => Promise<void>>;
+  // A failed action can leave a dialog or panel open: the next one reloads the editor.
+  dirty: boolean;
+}
+
 // Looker Studio has no API to edit reports, so this adapter drives the editor
-// in the signed-in Chrome profile, one action per page visit.
+// in the signed-in Chrome profile, one action per page visit (or several, inside inOneVisit).
 export class LookerStudioUiReportRepository implements ReportRepository {
+  private readonly visit = new AsyncLocalStorage<EditorVisit>();
+
   constructor(private readonly opts: LookerStudioUiOptions) {}
 
   private edit<T>(
@@ -103,6 +128,8 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     work: (editor: LookerStudioEditor) => Promise<T>,
     opts: { visible?: boolean } = {},
   ): Promise<T> {
+    const visit = this.visit.getStore();
+    if (visit?.reportId === reportId) return this.inVisit(visit, work);
     return this.opts.browser.withPage(async (page) => {
       const editor = await LookerStudioEditor.openReport(page, reportId, this.opts.stepTimeoutMs);
       // Pointer work only reaches what is on screen: make the whole page fit.
@@ -226,9 +253,13 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   }
 
   private async goToPage(editor: LookerStudioEditor, page?: number): Promise<void> {
-    if (!page || page <= 1) return;
+    // A fresh editor opens on the first page; one shared by a batch stays
+    // where the last action left it.
+    if (this.visit.getStore()) {
+      if ((await this.pageNow(editor)) === (page && page > 1 ? page : 1)) return;
+    } else if (!page || page <= 1) return;
     await editor.clickMenu('Page', ['First page']);
-    for (let i = 1; i < page; i++) {
+    for (let i = 1; i < (page ?? 1); i++) {
       const before = editor.page.url();
       await editor.clickMenu('Page', ['Next page']);
       if (editor.page.url() === before) throw new EditorStepError(`the report has no page ${page}`);
@@ -1946,4 +1977,381 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       });
     });
   }
+
+  // ── Batch: several actions in one editor visit ─────────────────────────
+
+  // Every call for `reportId` made inside `work` runs in this one editor visit
+  // instead of opening, fitting and closing the report again.
+  async inOneVisit<T>(reportId: string, work: () => Promise<T>): Promise<T> {
+    return this.edit(reportId, (editor) => {
+      editor.trackNetwork();
+      const visit: EditorVisit = { reportId, editor, restores: [], dirty: false };
+      return this.visit.run(visit, async () => {
+        try {
+          return await work();
+        } finally {
+          for (const restore of visit.restores.reverse()) await restore();
+        }
+      });
+    });
+  }
+
+  private async inVisit<T>(
+    visit: EditorVisit,
+    work: (editor: LookerStudioEditor) => Promise<T>,
+  ): Promise<T> {
+    const { editor } = visit;
+    const page = editor.page;
+    if (visit.dirty) {
+      await LookerStudioEditor.openReport(page, visit.reportId, this.opts.stepTimeoutMs);
+      visit.dirty = false;
+    } else {
+      // What the last action left selected or open must not catch this one's clicks.
+      await page.keyboard.press('Escape').catch(() => undefined);
+      await editor.deselect().catch(() => undefined);
+    }
+    // The last action may have made the page taller (canvas or page size).
+    visit.restores.push(await this.fitWindowTo(page, page.locator(SEL.canvas).first()));
+    try {
+      const result = await work(editor);
+      await editor.settle(500);
+      return result;
+    } catch (err) {
+      visit.dirty = true;
+      mkdirSync(this.opts.screenshotsDir, { recursive: true });
+      const shot = join(this.opts.screenshotsDir, `error-${visit.reportId}-${Date.now()}.png`);
+      await page.screenshot({ path: shot }).then(
+        () => this.opts.logger.warn(`editor step failed; screenshot at ${shot}`),
+        () => undefined,
+      );
+      throw err;
+    }
+  }
+
+  // The page being edited; no "Page N of M" label means a single page.
+  private async pageNow(editor: LookerStudioEditor): Promise<number> {
+    const label = editor.page.getByText(/^Page \d+ of \d+$/).first();
+    if (!(await label.count())) return 1;
+    const text = await label.textContent().catch(() => null);
+    return Number(/^Page (\d+)/.exec(text?.trim() ?? '')?.[1] ?? 1);
+  }
+
+  // ── Report specs: reading a whole report ───────────────────────────────
+
+  async listDataSources(reportId: string): Promise<string[]> {
+    return this.edit(reportId, async (editor) => {
+      await editor.clickMenu('Resource', ['Manage added data sources']);
+      await editor.page
+        .locator('tr, [role=row]')
+        .nth(1)
+        .waitFor({ timeout: this.opts.stepTimeoutMs })
+        .catch(() => undefined);
+      const sources = await this.listedSources(editor);
+      await this.closeSourcesPanel(editor);
+      return sources;
+    });
+  }
+
+  // Name, theme, data sources and every component of every page. Read only:
+  // panels are opened and closed, nothing is changed.
+  async readReport(reportId: string, style: StyleDepth): Promise<ReportSnapshot> {
+    return this.edit(reportId, async (editor) => {
+      const name = await editor.reportName();
+      const g = await editor.geometry();
+      const theme = await this.readThemeName(editor);
+      const dataSources = await this.readDataSources(editor, reportId);
+      const pages = await this.readPages(editor);
+      const out: ReportSnapshot['pages'] = [];
+      for (const page of pages) {
+        if (page.index > 1) await this.goToPage(editor, page.index);
+        else await editor.clickMenu('Page', ['First page']).catch(() => undefined);
+        const layouts = await editor.layouts();
+        const components: ComponentSnapshot[] = [];
+        for (const [index, layout] of layouts.entries()) {
+          components.push(
+            await this.readComponent(editor, index, layout, style, dataSources.length > 1),
+          );
+        }
+        await editor.deselect();
+        out.push({ name: page.name, components });
+      }
+      return {
+        name,
+        ...(theme ? { theme } : {}),
+        canvas: { width: Math.round(g.width), height: Math.round(g.height) },
+        dataSources,
+        pages: out,
+      };
+    });
+  }
+
+  private async readThemeName(editor: LookerStudioEditor): Promise<string | undefined> {
+    await editor.deselect();
+    await editor.page.getByRole('button', { name: 'Theme and layout' }).click();
+    await editor.settle(600);
+    const name = await editor.page
+      .locator('.theme-selector .header-name')
+      .first()
+      .textContent({ timeout: 3_000 })
+      .catch(() => null);
+    await editor.deselect();
+    return name?.trim() || undefined;
+  }
+
+  // Resource › Manage added data sources › Edit › Edit Connection shows the
+  // BigQuery project, dataset and table (their links carry the ids) or the
+  // custom query. Cancel leaves the connection as it was.
+  private async readDataSources(
+    editor: LookerStudioEditor,
+    reportId: string,
+  ): Promise<DataSourceSnapshot[]> {
+    const page = editor.page;
+    await editor.clickMenu('Resource', ['Manage added data sources']);
+    await page
+      .locator('tr, [role=row]')
+      .nth(1)
+      .waitFor({ timeout: this.opts.stepTimeoutMs })
+      .catch(() => undefined);
+    const names = await this.listedSources(editor);
+    await this.closeSourcesPanel(editor);
+    const out: DataSourceSnapshot[] = [];
+    for (const name of names) {
+      try {
+        await this.openSourceEditor(editor, name);
+        const source = await editor.step(`read the connection of ${name}`, async () => {
+          await page.getByText('Edit Connection', { exact: true }).first().click();
+          await page
+            .locator('ng2-config-column-item .list-option.selected')
+            .first()
+            .waitFor({ timeout: this.opts.stepTimeoutMs });
+          await editor.settle(800);
+          const found = await page.evaluate(() => {
+            const cm = document.querySelector<
+              HTMLElement & { CodeMirror?: { getValue(): string } }
+            >('.CodeMirror');
+            const links = [...document.querySelectorAll('.list-option.selected')]
+              .map((e) => e.closest('ng2-config-column-item')?.querySelector('a')?.href ?? '')
+              .filter(Boolean);
+            return { sql: cm?.CodeMirror?.getValue(), links };
+          });
+          const params = found.links.map((l) => new URL(l).searchParams);
+          const table = params.find((p) => p.get('t'));
+          const projectId = (table ?? params.find((p) => p.get('p')))?.get('p') ?? undefined;
+          if (found.sql?.trim() && projectId) return { projectId, sql: found.sql.trim(), name };
+          if (table && projectId)
+            return { projectId, datasetId: table.get('d') ?? '', tableId: table.get('t') ?? '' };
+          return undefined;
+        });
+        out.push({ name, ...(source ? { source } : {}) });
+        await page.getByRole('button', { name: 'Cancel' }).first().click({ timeout: 5_000 });
+        await editor.settle(800);
+        await page.getByRole('button', { name: 'Done' }).first().click({ timeout: 5_000 });
+        await editor.settle(800);
+        await this.closeSourcesPanel(editor);
+      } catch {
+        // A connection screen that would not close: start from a fresh editor.
+        if (!out.some((s) => s.name === name)) out.push({ name });
+        await LookerStudioEditor.openReport(page, reportId, this.opts.stepTimeoutMs);
+      }
+    }
+    return out;
+  }
+
+  private async readComponent(
+    editor: LookerStudioEditor,
+    index: number,
+    layout: Layout,
+    depth: StyleDepth,
+    severalSources: boolean,
+  ): Promise<ComponentSnapshot> {
+    const panel = await editor.select(index).catch(() => '');
+    if (!panel) return { kind: 'other', layout, panel: 'covered component' };
+    const dom = await editor.readComponentDom(index);
+    const control = (Object.keys(CONTROL_LABELS) as ControlKind[]).find(
+      (k) => `${CONTROL_LABELS[k]} properties`.toLowerCase() === panel.toLowerCase(),
+    );
+    // A selected drop-down opens its list over the panel.
+    if (control) await editor.closePopup();
+    const preset = control ? null : await editor.selectedPreset();
+    const kindOf = (label: string) =>
+      (Object.keys(CHART_PRESETS) as ChartType[]).find((t) => CHART_PRESETS[t] === label);
+    const chartType = preset ? kindOf(preset) : undefined;
+    const readStyle = async (skip: string[] = []) => {
+      if (depth === 'none') return undefined;
+      await editor.openTab('Style');
+      const style = specStyle(await editor.listSettings(), depth, skip);
+      await editor.openTab('Setup');
+      return Object.keys(style).length ? style : undefined;
+    };
+    const withStyle = <T extends object>(c: T, style: StyleSettings | undefined) =>
+      style ? { ...c, style } : c;
+
+    if (chartType) {
+      const chips = await editor.readSetupChips(SPEC_DETAILED_SECTIONS);
+      const setup = await editor.listSettings();
+      await editor.openTab('Style');
+      const styleList = await editor.listSettings();
+      const style = depth === 'none' ? {} : specStyle(styleList, depth, ['Title']);
+      const named = (f: { name: string; source?: string }) => f.source ?? f.name;
+      const inSection = (re: RegExp) => chips.filter((c) => re.test(c.section));
+      const dimensions = inSection(SECTION.dimensions).flatMap((c) => c.fields.map(named));
+      const metrics: MetricSpec[] = inSection(SECTION.metrics).flatMap((c) =>
+        c.fields.map((f) => {
+          const aggregation = (Object.keys(AGGREGATION_LABEL) as Aggregation[]).find(
+            (a) => AGGREGATION_LABEL[a] === f.aggregation,
+          );
+          return {
+            field: named(f),
+            ...(aggregation ? { aggregation } : {}),
+            ...(f.source && f.source !== f.name ? { label: f.name } : {}),
+          };
+        }),
+      );
+      const breakdown = inSection(SECTION.breakdown)[0]?.fields[0];
+      const sortChip = inSection(SECTION.sort)[0]?.fields[0]?.name;
+      const sortBy = metrics.find((m) => m.label === sortChip)?.field ?? sortChip;
+      const ascending = setup.find((s) => s.kind === 'radio' && s.label === 'Ascending');
+      const sortAscending = ascending?.value === 'selected';
+      const fields = Object.fromEntries(
+        chips
+          .filter((c) => !SPEC_SKIPPED_SECTIONS.test(c.section))
+          .map((c) => [c.section, c.fields.map(named)]),
+      );
+      const showTitle = styleList.find((s) => s.label === 'Show title')?.value === 'on';
+      const title = showTitle ? styleList.find((s) => s.label === 'Title')?.value : undefined;
+      const defaultSort = !sortBy || (sortBy === metrics[0]?.field && !sortAscending);
+      const dataSource = severalSources ? await editor.chartDataSource() : null;
+      await editor.openTab('Setup');
+      return withStyle(
+        {
+          kind: 'chart' as const,
+          layout,
+          chart: {
+            type: chartType,
+            dimensions,
+            metrics,
+            ...(breakdown ? { breakdown: named(breakdown) } : {}),
+            ...(defaultSort ? {} : { sortBy, sortAscending }),
+            ...(Object.keys(fields).length ? { fields } : {}),
+            ...(title ? { title } : {}),
+          },
+          ...(dataSource ? { dataSource } : {}),
+        },
+        Object.keys(style).length ? style : undefined,
+      );
+    }
+    if (control) {
+      const chips = await editor.readSetupChips(SPEC_DETAILED_SECTIONS);
+      const first = (re: RegExp) => {
+        const f = chips.find((c) => re.test(c.section))?.fields[0];
+        return f ? (f.source ?? f.name) : undefined;
+      };
+      const field = first(SECTION.control);
+      const metric = first(SECTION.metrics);
+      const dataSource = severalSources ? await editor.chartDataSource() : null;
+      return withStyle(
+        {
+          kind: 'control' as const,
+          layout,
+          control,
+          ...(field ? { field } : {}),
+          ...(metric ? { metric } : {}),
+          ...(dataSource ? { dataSource } : {}),
+        },
+        await readStyle(),
+      );
+    }
+    if (PANEL_KIND.text.test(panel)) {
+      await editor.openTab('Style');
+      const list = await editor.listSettings();
+      const background = cssColorToHex(list.find((s) => s.label === 'Background')?.value ?? '');
+      const color = dom.color ? cssColorToHex(dom.color) : null;
+      const align = dom.align === 'center' || dom.align === 'right' ? dom.align : undefined;
+      return withStyle(
+        {
+          kind: 'text' as const,
+          layout,
+          text: {
+            text: dom.text,
+            ...(dom.fontSize ? { fontSize: dom.fontSize } : {}),
+            ...(color ? { color } : {}),
+            ...(dom.bold ? { bold: true } : {}),
+            ...(background ? { background } : {}),
+            ...(align ? { align } : {}),
+          },
+        },
+        await readStyle(['Background']),
+      );
+    }
+    if (PANEL_KIND.shape.test(panel)) {
+      await editor.openTab('Style');
+      const list = await editor.listSettings();
+      const kind = (await editor.firstSelectValue())?.toLowerCase().replace(/\s+/g, '_');
+      const shape = (Object.keys(SHAPE_PATHS) as Array<keyof typeof SHAPE_PATHS>).find(
+        (k) => k === kind,
+      );
+      const background = cssColorToHex(list.find((s) => s.label === 'Background')?.value ?? '');
+      const border = cssColorToHex(list.find((s) => s.label === 'Border color')?.value ?? '');
+      const radius = Number(list.find((s) => s.label === 'Border radius')?.value);
+      return withStyle(
+        {
+          kind: 'shape' as const,
+          layout,
+          shape: {
+            shape: shape ?? 'rectangle',
+            ...(background ? { background } : {}),
+            ...(border ? { borderColor: border } : {}),
+            ...(Number.isFinite(radius) && radius > 0 ? { borderRadius: radius } : {}),
+          },
+        },
+        await readStyle(['Background', 'Border color', 'Border radius']),
+      );
+    }
+    if (PANEL_KIND.image.test(panel)) {
+      const url = dom.image && /^https:/i.test(dom.image) ? dom.image : undefined;
+      return withStyle(
+        { kind: 'image' as const, layout, ...(url ? { url } : {}) },
+        await readStyle(),
+      );
+    }
+    if (PANEL_KIND.line.test(panel)) {
+      const l = dom.line ?? { x1: 0, y1: 0, x2: layout.width, y2: layout.height };
+      return {
+        kind: 'line',
+        layout,
+        from: { x: Math.round(layout.x + l.x1), y: Math.round(layout.y + l.y1) },
+        to: { x: Math.round(layout.x + l.x2), y: Math.round(layout.y + l.y2) },
+      };
+    }
+    if (PANEL_KIND.embed.test(panel)) {
+      return withStyle(
+        { kind: 'embed' as const, layout, ...(dom.embed ? { url: dom.embed } : {}) },
+        await readStyle(),
+      );
+    }
+    return { kind: 'other', layout, panel: panel.replace(/ properties$/i, '') };
+  }
+}
+
+// The Style settings a spec keeps: the main card settings, or every toggle and
+// box (a repeated label is numbered "Label#2" as applySettings reads it).
+function specStyle(list: SettingInfo[], depth: StyleDepth, skip: string[]): StyleSettings {
+  const out: StyleSettings = {};
+  const seen = new Map<string, number>();
+  for (const s of list) {
+    if (s.kind === 'radio') continue;
+    const n = (seen.get(s.label) ?? 0) + 1;
+    seen.set(s.label, n);
+    if (skip.includes(s.label)) continue;
+    if (depth === 'main' && (n > 1 || !MAIN_STYLE.includes(s.label))) continue;
+    const key = n > 1 ? `${s.label}#${n}` : s.label;
+    const value = s.kind === 'toggle' ? s.value === 'on' : s.value;
+    if (depth === 'main' && MAIN_STYLE_NEUTRAL[s.label] === value) continue;
+    if (s.kind === 'toggle') out[key] = s.value === 'on';
+    else if (/^(rgb|#)/i.test(s.value)) {
+      const hex = cssColorToHex(s.value);
+      if (hex) out[key] = hex;
+    } else if (s.value && s.value !== 'transparent') out[key] = s.value;
+  }
+  return out;
 }

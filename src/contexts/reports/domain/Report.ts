@@ -563,3 +563,18 @@ export function validateSettings(settings: StyleSettings): StyleSettings {
   }
   return settings;
 }
+
+// ── Report specs ──
+
+// "rgb(12, 34, 56)", "rgba(…, 1)" or "#abcdef" to "#0C2238"; null for
+// transparent or anything else.
+export function cssColorToHex(value: string): string | null {
+  const v = value.trim();
+  if (/^#[0-9a-f]{6}$/i.test(v)) return v.toUpperCase();
+  const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(v);
+  if (!m || (m[4] !== undefined && Number(m[4]) === 0)) return null;
+  return `#${[m[1], m[2], m[3]]
+    .map((n) => Math.min(255, Number(n)).toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase()}`;
+}
