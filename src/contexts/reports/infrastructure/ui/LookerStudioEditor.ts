@@ -18,10 +18,36 @@ import {
   isQuerySource,
 } from '@/contexts/reports/domain/Report.js';
 
+import type { CommunityVizSource } from '@/contexts/reports/domain/community.js';
+import {
+  CONNECTOR_LABEL,
+  type DataSource,
+  type DatabaseSource,
+  type DatabaseSsl,
+  type SheetsSource,
+  describeDataSource,
+  isDatabaseSource,
+  isSheetsSource,
+} from '@/contexts/reports/domain/connectors.js';
+
 type FilterClauseInput = FilterClause;
 import { InfrastructureError } from '@/shared-kernel/errors/InfrastructureError.js';
 
-import { BASE, HL, SECTION, SEL, cssEscape, datePresetPath, escapeRegExp } from './selectors.js';
+import {
+  BASE,
+  COMMUNITY_SEL,
+  CONNECTOR_SEL,
+  DB_CERTIFICATE_HINT,
+  DB_CLIENT_AUTH_LABEL,
+  DB_SSL_LABEL,
+  HL,
+  SECTION,
+  SEL,
+  SHEETS_URL_OPTION,
+  cssEscape,
+  datePresetPath,
+  escapeRegExp,
+} from './selectors.js';
 
 export class EditorStepError extends InfrastructureError {
   readonly code = 'LOOKER_STUDIO_EDITOR';
@@ -1699,5 +1725,281 @@ export class LookerStudioEditor {
       if (!id) throw new Error('the report URL has no id');
       return id;
     });
+  }
+
+  // ── Connectors ─────────────────────────────────────────────────────────
+
+  // Fills the connector form that "Add data" (or a new report) opens.
+  async connectSource(source: DataSource): Promise<void> {
+    if (!isSheetsSource(source) && !isDatabaseSource(source)) return this.connectBigQuery(source);
+    const label = CONNECTOR_LABEL[source.connector];
+    await this.step(`connect ${describeDataSource(source)}`, async () => {
+      await this.page.locator(CONNECTOR_SEL.tile(label)).first().click({ timeout: this.timeoutMs });
+      await this.authorizeConnector();
+      if (isSheetsSource(source)) await this.fillSheets(source);
+      else await this.fillDatabase(source);
+      await this.page.getByRole('button', { name: 'Add', exact: true }).click();
+      const confirm = this.page.getByRole('button', { name: 'Add to report', exact: true });
+      await confirm.click({ timeout: 5_000 }).catch(() => undefined);
+      await this.page
+        .locator(SEL.dataPanelChip('Record Count'))
+        .first()
+        .waitFor({ timeout: this.timeoutMs });
+    });
+    await this.settle();
+  }
+
+  // The first use of a connector asks to authorize it in a Google OAuth popup:
+  // pick the signed-in account and approve. Later uses skip straight to the form.
+  private async authorizeConnector(): Promise<void> {
+    const authorize = this.page.getByRole('button', { name: 'Authorize', exact: true });
+    const form = this.page.locator(
+      `${CONNECTOR_SEL.sheetsSourceList}, ${CONNECTOR_SEL.dbInput('hostNameOrIp')}`,
+    );
+    await authorize.or(form).first().waitFor({ timeout: this.timeoutMs });
+    if (!(await authorize.isVisible().catch(() => false))) return;
+    const popupOpened = this.page.context().waitForEvent('page', { timeout: this.timeoutMs });
+    await authorize.click();
+    const popup = await popupOpened;
+    await popup.waitForLoadState('domcontentloaded').catch(() => undefined);
+    const hint = new URL(popup.url()).searchParams.get('login_hint');
+    const account = popup
+      .locator(hint ? CONNECTOR_SEL.oauthAccount(hint) : CONNECTOR_SEL.oauthAnyAccount)
+      .first();
+    const approve = popup.locator(CONNECTOR_SEL.oauthApprove);
+    await account
+      .or(approve)
+      .first()
+      .waitFor({ timeout: this.timeoutMs })
+      .catch(() => undefined);
+    if (!popup.isClosed() && (await account.isVisible().catch(() => false))) await account.click();
+    if (!popup.isClosed())
+      await approve.click({ timeout: this.timeoutMs }).catch((err: unknown) => {
+        if (!popup.isClosed()) throw err;
+      });
+    if (!popup.isClosed()) await popup.waitForEvent('close', { timeout: this.timeoutMs });
+    await form.first().waitFor({ timeout: this.timeoutMs });
+  }
+
+  // Url option: the spreadsheet by URL or id, then its tab and the options.
+  private async fillSheets(source: SheetsSource): Promise<void> {
+    await this.page
+      .locator(CONNECTOR_SEL.sheetsSourceList)
+      .getByText(SHEETS_URL_OPTION, { exact: true })
+      .click({ timeout: this.timeoutMs });
+    const url = this.page.locator(CONNECTOR_SEL.sheetsUrlInput);
+    await url.fill(source.spreadsheetId);
+    await url.press('Enter');
+    const tabs = this.page.locator(CONNECTOR_SEL.sheetsWorksheet);
+    await tabs
+      .first()
+      .waitFor({ timeout: this.timeoutMs })
+      .catch(() => {
+        throw new Error(
+          `spreadsheet ${source.spreadsheetId} was not found or the account cannot open it`,
+        );
+      });
+    // Each tab row links to the sheet with its gid.
+    const tab = source.worksheet
+      ? tabs.getByText(source.worksheet, { exact: true })
+      : this.page.locator(
+          `${CONNECTOR_SEL.sheetsWorksheet}:has(+ a[href*="gid=${cssEscape(source.worksheetId ?? '')}"])`,
+        );
+    await tab
+      .first()
+      .click({ timeout: 5_000 })
+      .catch(async () => {
+        const names = await tabs.allInnerTexts();
+        throw new Error(
+          `the spreadsheet has no worksheet ${source.worksheet ?? `with gid ${source.worksheetId}`} (it has ${names.join(', ')})`,
+        );
+      });
+    await this.setCheckbox(CONNECTOR_SEL.sheetsOption('hasHeader'), source.hasHeader);
+    await this.setCheckbox(
+      CONNECTOR_SEL.sheetsOption('includeHiddenCells'),
+      source.includeHiddenAndFiltered,
+    );
+    await this.setCheckbox(CONNECTOR_SEL.sheetsOption('includeSpecificRange'), !!source.range);
+    if (source.range) await this.page.locator(CONNECTOR_SEL.sheetsRangeInput).fill(source.range);
+  }
+
+  // Basic authentication, AUTHENTICATE, then a table or a custom query. The
+  // part after AUTHENTICATE was written from the documented form, not seen live.
+  private async fillDatabase(source: DatabaseSource): Promise<void> {
+    const fill = (control: Parameters<typeof CONNECTOR_SEL.dbInput>[0], value: string) =>
+      this.page.locator(CONNECTOR_SEL.dbInput(control)).first().fill(value);
+    await fill('hostNameOrIp', source.host);
+    if (source.port !== undefined) await fill('port', String(source.port));
+    await fill('database', source.database);
+    await fill('username', source.user);
+    await fill('password', source.password);
+    if (source.ssl) await this.setDatabaseSsl(source.ssl);
+    await this.page.getByRole('button', { name: 'AUTHENTICATE' }).click();
+    await this.settle(1500);
+    if (source.table) {
+      await this.clickVisibleText(source.table).catch(() => {
+        throw new Error(
+          `the database has no table "${source.table}", or the connection was refused (check host, port, credentials and the Looker Studio IP allowlist)`,
+        );
+      });
+      return;
+    }
+    await this.clickVisibleText('CUSTOM QUERY').catch(() => this.clickVisibleText('Custom Query'));
+    const editor = this.page.locator(`${SEL.customQueryEditor}, textarea`).first();
+    await editor.waitFor({ timeout: this.timeoutMs });
+    await editor.evaluate((e, sql) => {
+      const cm = (e as HTMLElement & { CodeMirror?: { setValue(v: string): void } }).CodeMirror;
+      if (cm) cm.setValue(sql);
+      else {
+        const area = e as HTMLTextAreaElement;
+        area.value = sql;
+        area.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }, source.sql ?? '');
+  }
+
+  private async setDatabaseSsl(ssl: DatabaseSsl): Promise<void> {
+    await this.setCheckbox(`mat-checkbox:has-text("${cssEscape(DB_SSL_LABEL)}")`, true);
+    const clientAuth = !!(ssl.clientCertificate && ssl.clientKey);
+    await this.setCheckbox(
+      `mat-checkbox:has-text("${cssEscape(DB_CLIENT_AUTH_LABEL)}")`,
+      clientAuth,
+    );
+    for (const key of Object.keys(DB_CERTIFICATE_HINT) as Array<keyof DatabaseSsl>) {
+      const file = ssl[key];
+      if (!file) continue;
+      // The upload button sits next to the file name box, outside its form field.
+      const at = await this.page.evaluate(
+        ({ hint, button }) => {
+          const buttons = [...document.querySelectorAll(button)];
+          const label = [...document.querySelectorAll('mat-hint')].find(
+            (h) => h.textContent?.trim() === hint && h.getBoundingClientRect().width > 0,
+          );
+          for (let e = label?.parentElement; e; e = e.parentElement) {
+            const own = e.querySelector(button);
+            if (own) return buttons.indexOf(own);
+          }
+          return -1;
+        },
+        { hint: DB_CERTIFICATE_HINT[key], button: CONNECTOR_SEL.dbUploadButton },
+      );
+      if (at < 0) throw new Error(`the connector has no "${DB_CERTIFICATE_HINT[key]}" upload`);
+      const chooser = this.page.waitForEvent('filechooser', { timeout: this.timeoutMs });
+      await this.page.locator(CONNECTOR_SEL.dbUploadButton).nth(at).click();
+      await (await chooser).setFiles(file);
+      await this.settle(500);
+    }
+  }
+
+  // Material checkboxes: click the native input only when the state differs.
+  private async setCheckbox(selector: string, on: boolean): Promise<void> {
+    const box = this.page.locator(selector).first();
+    await box.waitFor({ timeout: this.timeoutMs });
+    const checked = await box.locator('input[type=checkbox]').isChecked();
+    if (checked !== on) await box.locator('input[type=checkbox]').click({ force: true });
+  }
+
+  // ── Community visualizations ───────────────────────────────────────────
+
+  // Arms the editor to insert a community visualization: the toolbar menu
+  // shows a few featured cards, "+ Explore more" the whole gallery and "Build
+  // your own visualization" a manifest path. Third-party ones ask for consent
+  // the first time. The next canvas click places the component.
+  async pickCommunityViz(source: CommunityVizSource): Promise<void> {
+    await this.page
+      .getByRole('button', { name: COMMUNITY_SEL.toolbarButton })
+      .click({ timeout: this.timeoutMs });
+    await sleep(800);
+    if ('gallery' in source) {
+      if (!(await this.clickCard(source.gallery, '.cdk-overlay-container'))) {
+        await this.page.getByText(COMMUNITY_SEL.exploreMore, { exact: true }).click();
+        await this.waitForCards();
+        if (!(await this.clickCard(source.gallery))) {
+          const names = await this.cardNames();
+          throw new Error(
+            `the Community Gallery has no visualization "${source.gallery}" (it lists ${names.join(', ')})`,
+          );
+        }
+      }
+    } else {
+      await this.page.getByText(COMMUNITY_SEL.exploreMore, { exact: true }).click();
+      await this.waitForCards();
+      await this.page.getByText(COMMUNITY_SEL.buildYourOwn, { exact: true }).first().click();
+      const before = await this.cardNames();
+      const manifest = this.page.locator(COMMUNITY_SEL.manifestInput);
+      await manifest.fill(source.manifestPath);
+      await this.page.getByRole('button', { name: 'Submit', exact: true }).click();
+      // A valid manifest shows its visualizations as cards under the form; a
+      // bad one an error under the box.
+      const deadline = Date.now() + this.timeoutMs;
+      let fresh: string[] = [];
+      let problem = '';
+      while (Date.now() < deadline && fresh.length === 0 && !problem) {
+        await sleep(500);
+        fresh = (await this.cardNames()).filter((n) => !before.includes(n));
+        problem = (
+          (await this.page
+            .locator(COMMUNITY_SEL.manifestError)
+            .filter({ visible: true })
+            .first()
+            .textContent({ timeout: 200 })
+            .catch(() => '')) ?? ''
+        ).trim();
+      }
+      if (problem) throw new Error(problem);
+      if (!fresh[0] || !(await this.clickCard(fresh[0])))
+        throw new Error(`no visualization could be loaded from ${source.manifestPath}`);
+    }
+    const consent = this.page.locator('mat-dialog-container', {
+      hasText: COMMUNITY_SEL.consentTitle,
+    });
+    if (
+      await consent.waitFor({ timeout: 4_000 }).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      await consent.getByRole('button', { name: 'Allow', exact: true }).click();
+      await consent.waitFor({ state: 'hidden', timeout: this.timeoutMs });
+    }
+    await sleep(500);
+  }
+
+  private async waitForCards(): Promise<void> {
+    await this.page
+      .locator(COMMUNITY_SEL.cardName)
+      .nth(3)
+      .waitFor({ timeout: this.timeoutMs })
+      .catch(() => undefined);
+  }
+
+  private cardNames(): Promise<string[]> {
+    return this.page.locator(COMMUNITY_SEL.cardName).evaluateAll((cards) =>
+      cards
+        .filter((c) => c.getBoundingClientRect().width > 0)
+        .map((c) => c.textContent?.trim() ?? '')
+        .filter(Boolean),
+    );
+  }
+
+  // Card names are matched whole, ignoring case. False when none is shown.
+  private async clickCard(name: string, within = 'body'): Promise<boolean> {
+    const point = await this.page.evaluate(
+      ({ wanted, scope, card }) => {
+        const hit = [...document.querySelectorAll<HTMLElement>(`${scope} ${card}`)].find(
+          (c) =>
+            c.getBoundingClientRect().width > 0 && c.textContent?.trim().toLowerCase() === wanted,
+        );
+        if (!hit) return null;
+        hit.scrollIntoView({ block: 'center' });
+        const r = hit.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      },
+      { wanted: name.trim().toLowerCase(), scope: within, card: COMMUNITY_SEL.cardName },
+    );
+    if (!point) return false;
+    await this.page.mouse.click(point.x, point.y);
+    await sleep(1000);
+    return true;
   }
 }

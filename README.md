@@ -34,6 +34,7 @@ claude mcp add looker-studio -- node /path/to/looker-studio-mcp/build/cli/main.j
 - [Write operations](#write-operations)
 - [Available tools](#available-tools)
 - [Custom queries](#custom-queries)
+- [Other connectors](#other-connectors)
 - [Designing dashboards](#designing-dashboards)
 - [CLI reference](#cli-reference)
 - [Limits](#limits)
@@ -97,15 +98,15 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `list_components` | Charts, texts and shapes of a page: index, kind, layout |
 | `describe_component` | Every Setup/Style setting of a component with its exact label and value |
 | `screenshot_report` | PNG of a page in view mode, returned as an image |
-| `build_report_link` | A Linking API URL that creates a report from BigQuery tables or custom queries |
+| `build_report_link` | A Linking API URL that creates a report from BigQuery tables, custom queries or Google Sheets |
 
 ### Write tools (require writes)
 
 | Tool | What it does |
 |---|---|
 | `create_view`, `delete_view` | BigQuery views (dry-run validated first) |
-| `create_report` | New report connected to a BigQuery table, view or custom query (`sql`) |
-| `add_data_source` | Connect another BigQuery table, view or custom query (`sql`, optional `source_name`) to a report |
+| `create_report` | New report connected to a BigQuery table, view or custom query (`sql`), a Google Sheet, or a PostgreSQL/MySQL database (`connector`) |
+| `add_data_source` | Connect another BigQuery table, view or custom query (`sql`, optional `source_name`), Google Sheet or PostgreSQL/MySQL database (`connector`) to a report |
 | `refresh_data_source` | Re-read a data source's fields after a column was added to the table or view |
 | `add_chart` | All 49 chart presets: tables (with bars/heatmap), scorecards (compact, with dimension, sparkline), time series, bars (stacked, 100%), histogram, pie, donut, line, area, combo, pivot tables (with bars/heatmap), funnel, waterfall, sankey, bullet, gauge, treemap, scatter, bubble, boxplot, candlestick, timeline, geo and Google Maps — with dimensions, metrics (aggregation, display name), breakdown, sorts (Sort #2…), extra Setup slots, filters (AND/OR), default date range (preset or fixed dates), comparison period, combo series, value colors, reference lines and bands, conditional formatting, title, layout and Style settings |
 | `add_control` | Drop-down, fixed-size list, input box, advanced filter, slider, checkbox, preset filter, date range, data control, dimension control, button (link to a URL or page, or a report action) |
@@ -126,12 +127,22 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `set_theme` | Built-in theme, custom theme settings, page size, Layout settings (tab navigation, header) |
 | `share_report` | Invite several people at once as viewers or editors; existing access is changed in place |
 | `add_page`, `rename_page`, `manage_page`, `rename_report`, `delete_report` | Report management; `manage_page` deletes, duplicates, hides/shows and reorders pages |
+| `add_community_viz` | Community visualization from the gallery by name ("Gauge", "Sunburst Chart"…) or your own by `manifest_path` (gs://…), with consent, data source, dimensions, metrics, Setup slots, filters, style and layout |
 
 Settings are addressed by the **label the properties panel shows** (`"Bar color"`, `"Show data labels"`, `"Border radius"`…). `describe_component` lists them; settings that do not exist come back as warnings instead of failing silently.
 
 ## Custom queries
 
 `create_report`, `add_data_source` and `build_report_link` take `sql` instead of `dataset_id` and `table_id`; `project_id` is then the billing project and `source_name` names the data source. The data source then works like any other. See [docs/custom-queries.md](docs/custom-queries.md) for naming, field types, validation and cost.
+
+## Other connectors
+
+`create_report`, `add_data_source` and `build_report_link` take `connector` (default `bigquery`, so existing calls are unchanged):
+
+- `google_sheets`: `spreadsheet` (URL or id), `worksheet` (tab name) or `worksheet_id` (its gid), `use_first_row_as_headers`, `include_hidden_and_filtered_cells`, `range`.
+- `postgresql`, `mysql`: `host`, `port`, `database`, `user`, `password`, `ssl`, and `table_id` or `sql`. Not available in `build_report_link` (the Linking API has no such connector).
+
+Passwords are redacted from the audit log and never appear in replies. See [docs/connectors.md](docs/connectors.md).
 
 ## Designing dashboards
 
@@ -162,7 +173,8 @@ See [docs/design-guide.md](docs/design-guide.md) for the canvas grid, the card p
 - `manage_filter` edit rewrites every clause of the filter; charts that use it keep it.
 - Filter values are typed as free text (the editor's value suggestions are turned off), so a value that is not in the data is accepted: check the spelling. "In" takes its values comma separated.
 - Custom queries: always pass `source_name`, cast columns whose type Looker Studio may guess wrong, and dry-run the SQL first ([details](docs/custom-queries.md)).
-- Community visualizations are not covered: they need a third-party component URL and its own permission prompt.
+- PostgreSQL and MySQL were written against the live connector form, but not run end to end against a database: the table list and custom query step after AUTHENTICATE are untested ([details](docs/connectors.md)).
+- Community visualizations define their own Setup slots and Style settings: use `describe_component` to read them. `add_community_viz` accepts the gallery's consent prompt for you.
 - `share_report` opens a visible Chrome window for a few seconds: Google refuses invitations sent from a headless browser. It sends one invitation per address, since a batch fails with "An unknown error occurred".
 
 ## Architecture

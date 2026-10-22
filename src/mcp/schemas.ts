@@ -8,6 +8,7 @@ import {
   SHAPE_KINDS,
 } from '@/contexts/reports/domain/ReportRepository.js';
 import type { ButtonSpec, DataSettings, FilterSpec } from '@/contexts/reports/domain/Report.js';
+import { CONNECTORS } from '@/contexts/reports/domain/connectors.js';
 
 const projectId = z
   .string()
@@ -344,17 +345,68 @@ const sourceShape = {
       'Google Cloud project id (for sql: the billing project). Defaults to project_id in the config.',
     ),
   dataset_id: datasetId.optional().describe('Dataset of table_id'),
-  table_id: z.string().optional().describe('Table or view the report reads'),
+  table_id: z
+    .string()
+    .optional()
+    .describe('Table or view the report reads (postgresql/mysql: a table of the database)'),
   sql: z
     .string()
     .min(1)
     .optional()
-    .describe('Custom query (GoogleSQL SELECT) to use instead of a table or view'),
+    .describe(
+      'Custom query to use instead of a table or view (GoogleSQL for BigQuery, the database dialect otherwise)',
+    ),
   source_name: z
     .string()
     .min(1)
     .optional()
-    .describe('Name of the custom query data source in the report (only with sql)'),
+    .describe(
+      'Name of the data source in the report (BigQuery: only with sql; any other connector)',
+    ),
+  // Other connectors. table_id and sql also name the table or custom query of a database.
+  connector: z
+    .enum(CONNECTORS)
+    .optional()
+    .describe('Where the data comes from: bigquery (default), google_sheets, postgresql, mysql'),
+  spreadsheet: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('google_sheets: spreadsheet URL or id (a URL with #gid= also gives worksheet_id)'),
+  worksheet: z.string().min(1).optional().describe('google_sheets: tab name'),
+  worksheet_id: z
+    .union([z.string(), z.number().int().nonnegative()])
+    .optional()
+    .describe('google_sheets: tab id, the number after #gid= (build_report_link needs it)'),
+  use_first_row_as_headers: z
+    .boolean()
+    .optional()
+    .describe('google_sheets: "Use first row as headers" (default true)'),
+  include_hidden_and_filtered_cells: z
+    .boolean()
+    .optional()
+    .describe('google_sheets: "Include hidden and filtered cells" (default true)'),
+  range: z.string().optional().describe('google_sheets: only this A1 range, e.g. A1:D20'),
+  host: z.string().min(1).optional().describe('postgresql/mysql: host name or IP'),
+  port: z.number().int().positive().optional().describe('postgresql/mysql: port (optional)'),
+  database: z.string().min(1).optional().describe('postgresql/mysql: database name'),
+  user: z.string().min(1).optional().describe('postgresql/mysql: user name'),
+  password: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('postgresql/mysql: password (never logged or audited)'),
+  ssl: z
+    .object({
+      server_certificate: z.string().optional().describe('Local PEM file'),
+      client_certificate: z
+        .string()
+        .optional()
+        .describe('Local PEM file; turns on client authentication'),
+      client_key: z.string().optional().describe('Local PEM file, with client_certificate'),
+    })
+    .optional()
+    .describe('postgresql/mysql: turns on "Enable SSL"; certificate files are optional'),
 };
 
 export const createReportSchema = z.object({
@@ -729,4 +781,37 @@ export const createBlendSchema = z.object({
       }),
     )
     .describe('One per table after the first'),
+});
+
+// ── Community visualizations ──
+export const addCommunityVizSchema = z.object({
+  report_id: reportId,
+  name: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Card name in the Community Gallery, e.g. "Gauge", "Sunburst Chart", "Gantt Chart"'),
+  manifest_path: z
+    .string()
+    .optional()
+    .describe(
+      'Instead of name: gs:// path of your own visualization ("Build your own visualization")',
+    ),
+  dimensions: z.array(z.string()).default([]).describe('Fields for its Dimension section'),
+  metrics: z
+    .array(
+      z.object({
+        field: z.string().describe('Field name, or "Record Count"'),
+        aggregation: z.enum(AGGREGATIONS).optional(),
+        label: z.string().optional().describe('Display name'),
+      }),
+    )
+    .default([])
+    .describe('Fields for its Metric section'),
+  title: z.string().optional(),
+  layout: layout.optional(),
+  style: settings.optional().describe('Style tab settings, as describe_component lists them'),
+  page,
+  data_source: z.string().optional().describe('Data source name when the report has several'),
+  ...dataShape,
 });

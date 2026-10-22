@@ -1,5 +1,5 @@
 import { createReport } from '@/contexts/reports/application/reportUseCases.js';
-import { describeSource } from '@/contexts/reports/domain/Report.js';
+import { describeDataSource } from '@/contexts/reports/domain/connectors.js';
 import { createReportSchema } from '@/mcp/schemas.js';
 import {
   resolveSource,
@@ -17,7 +17,7 @@ export async function handleCreateReport(
 ): Promise<ToolResult> {
   const input = createReportSchema.parse(raw);
   const source = resolveSource(deps.defaultProject, input);
-  const table = describeSource(source);
+  const table = describeDataSource(source);
   return runWrite(
     deps,
     'create_report',

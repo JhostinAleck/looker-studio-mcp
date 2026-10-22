@@ -1,5 +1,6 @@
+import type { CommunityVizSpec } from './community.js';
+import type { DataSource } from './connectors.js';
 import type {
-  BigQuerySource,
   ButtonSpec,
   ChartSpec,
   ChartType,
@@ -195,8 +196,8 @@ export interface ThemeSpec {
 
 export interface ReportRepository {
   listReports(): Promise<ReportSummary[]>;
-  createReport(name: string, source: BigQuerySource): Promise<ReportSummary>;
-  addDataSource(reportId: string, source: BigQuerySource): Promise<void>;
+  createReport(name: string, source: DataSource): Promise<ReportSummary>;
+  addDataSource(reportId: string, source: DataSource): Promise<void>;
   // Re-reads the fields of the report's data sources (all, or the one named):
   // a column added to a table or view is invisible until then. Returns the new fields.
   refreshDataSources(reportId: string, name?: string): Promise<string[]>;
@@ -296,4 +297,10 @@ export interface ReportRepository {
   // PNG of the report in view mode; returns the saved file path.
   screenshot(reportId: string, page?: number): Promise<string>;
   deleteReport(reportId: string): Promise<void>;
+  // ── Community visualizations ──
+  addCommunityViz(
+    reportId: string,
+    viz: CommunityVizSpec,
+    opts: PlaceOptions & { dataSource?: string; style?: StyleSettings },
+  ): Promise<ComponentInfo>;
 }

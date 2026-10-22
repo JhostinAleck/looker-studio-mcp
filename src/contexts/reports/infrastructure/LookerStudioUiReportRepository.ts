@@ -26,7 +26,6 @@ import type {
 } from '@/contexts/reports/domain/ReportRepository.js';
 import {
   type Aggregation,
-  type BigQuerySource,
   type ChartSpec,
   type ChartType,
   type ComponentDetails,
@@ -39,9 +38,13 @@ import {
   type ReportSummary,
   type StyleSettings,
   filterClauses,
-  isQuerySource,
   reportUrl,
 } from '@/contexts/reports/domain/Report.js';
+import {
+  type CommunityVizSpec,
+  describeCommunityViz,
+} from '@/contexts/reports/domain/community.js';
+import { type DataSource, sourceName } from '@/contexts/reports/domain/connectors.js';
 import type { Logger } from '@/shared-kernel/logging/Logger.js';
 
 import { EditorStepError, LookerStudioEditor } from './ui/LookerStudioEditor.js';
@@ -49,6 +52,7 @@ import {
   ARRANGE_PATHS,
   BASE,
   CHART_PRESETS,
+  COMMUNITY_SEL,
   CONTROL_LABELS,
   FILTER_CONDITIONS,
   HL,
@@ -152,11 +156,12 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     });
   }
 
-  async createReport(name: string, source: BigQuerySource): Promise<ReportSummary> {
+  async createReport(name: string, source: DataSource): Promise<ReportSummary> {
     return this.opts.browser.withPage(async (page) => {
       const editor = await LookerStudioEditor.openNew(page, this.opts.stepTimeoutMs);
-      await editor.connectBigQuery(source);
-      if (isQuerySource(source) && source.name) await this.renameNewestSource(editor, source.name);
+      await editor.connectSource(source);
+      const sourceLabel = sourceName(source);
+      if (sourceLabel) await this.renameNewestSource(editor, sourceLabel);
       await editor.rename(name);
       const id = (await editor.saveNew()).toLowerCase();
       return { id, name, url: reportUrl(id) };
@@ -217,11 +222,12 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     });
   }
 
-  async addDataSource(reportId: string, source: BigQuerySource): Promise<void> {
+  async addDataSource(reportId: string, source: DataSource): Promise<void> {
     await this.edit(reportId, async (editor) => {
       await editor.page.getByRole('button', { name: 'Add data', exact: true }).first().click();
-      await editor.connectBigQuery(source);
-      if (isQuerySource(source) && source.name) await this.renameNewestSource(editor, source.name);
+      await editor.connectSource(source);
+      const sourceLabel = sourceName(source);
+      if (sourceLabel) await this.renameNewestSource(editor, sourceLabel);
     });
   }
 
@@ -1945,5 +1951,86 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         await link.waitFor({ state: 'detached', timeout: this.opts.stepTimeoutMs });
       });
     });
+  }
+
+  // ── Community visualizations ───────────────────────────────────────────
+
+  async addCommunityViz(
+    reportId: string,
+    viz: CommunityVizSpec,
+    opts: PlaceOptions & { dataSource?: string; style?: StyleSettings },
+  ): Promise<ComponentInfo> {
+    return this.edit(reportId, async (editor) => {
+      await this.goToPage(editor, opts.page);
+      const spot = await this.spotFor(editor, opts.layout);
+      const what = describeCommunityViz(viz.source);
+      const index = await editor.placeAt(spot.x, spot.y, () =>
+        editor.step(`pick the ${what}`, () => editor.pickCommunityViz(viz.source)),
+      );
+      const title = await editor.select(index);
+      if (!COMMUNITY_SEL.panelTitle.test(title)) {
+        await editor.undo();
+        throw new EditorStepError(
+          `expected a community visualization but the editor inserted "${title || 'unknown'}"; it was undone.`,
+        );
+      }
+      try {
+        return await this.configureCommunityViz(editor, index, viz, opts);
+      } catch (err) {
+        await editor.select(index).catch(() => undefined);
+        await editor.page.keyboard.press('Delete').catch(() => undefined);
+        await editor.settle().catch(() => undefined);
+        throw err;
+      }
+    });
+  }
+
+  // Each visualization defines its own Setup slots: dimensions and metrics go
+  // to the sections named like the built-in ones, anything else by heading.
+  private async configureCommunityViz(
+    editor: LookerStudioEditor,
+    index: number,
+    viz: CommunityVizSpec,
+    opts: PlaceOptions & { dataSource?: string; style?: StyleSettings },
+  ): Promise<ComponentInfo> {
+    if (opts.dataSource) await editor.chooseDataSource(opts.dataSource);
+    if (viz.dimensions.length > 0)
+      await editor.setSectionFields(SECTION.dimensions, viz.dimensions, 'the dimensions');
+    if (viz.metrics.length > 0)
+      await editor.setSectionFields(
+        SECTION.metrics,
+        viz.metrics.map((m) => m.field),
+        'the metrics',
+      );
+    await this.applyFields(editor, viz.fields ?? {});
+    for (const [i, metric] of viz.metrics.entries()) {
+      if (!metric.aggregation && metric.label === undefined) continue;
+      await editor.editMetric(i, {
+        ...(metric.aggregation ? { aggregation: AGGREGATION_LABEL[metric.aggregation] } : {}),
+        ...(metric.label !== undefined ? { label: metric.label } : {}),
+      });
+    }
+    const warnings = await this.applyData(editor, { ...viz, fields: {} });
+    const style: StyleSettings = {
+      ...(viz.title ? { 'Show title': true } : {}),
+      ...(opts.style ?? {}),
+    };
+    if (Object.keys(style).length > 0) {
+      await editor.openTab('Style');
+      warnings.push(...(await editor.applySettings(style)));
+      if (viz.title) warnings.push(...(await this.setChartTitle(editor, viz.title)));
+    }
+    // The visualization draws in an iframe that takes the pointer: a resize
+    // handle dragged inwards over it lost the drag (and once left it 6x1).
+    await editor.deselect();
+    await editor.settle(1500);
+    const unblock = await editor.page.addStyleTag({
+      content: `${SEL.canvas} iframe { pointer-events: none !important; }`,
+    });
+    try {
+      return await this.finish(editor, index, opts.layout, warnings);
+    } finally {
+      await unblock.evaluate((e: Element) => e.remove()).catch(() => undefined);
+    }
   }
 }

@@ -46,6 +46,7 @@ import { handleScreenshotReport } from './tools/screenshot-report.tool.js';
 import { handleSetTheme } from './tools/set-theme.tool.js';
 import { handleShareReport } from './tools/share-report.tool.js';
 import { handleUpdateComponent } from './tools/update-component.tool.js';
+import { handleAddCommunityViz } from './tools/add-community-viz.tool.js';
 
 export interface ToolDeps extends BigQueryToolDeps, ReportToolDeps, CheckAuthDeps, WriteDeps {}
 
@@ -148,7 +149,7 @@ const TOOLS: ToolDef[] = [
     name: 'build_report_link',
     title: 'Build a report link',
     description:
-      'Build a Looker Studio Linking API URL that creates a report (blank or copied from a template) connected to BigQuery tables, views or custom queries (sql). The user opens it to confirm.',
+      'Build a Looker Studio Linking API URL that creates a report (blank or copied from a template) connected to BigQuery tables, views or custom queries (sql), or to Google Sheets (connector google_sheets with spreadsheet and worksheet_id, the gid). The user opens it to confirm. The Linking API has no PostgreSQL or MySQL connector.',
     schema: schemas.buildReportLinkSchema,
     write: false,
     run: handleBuildReportLink,
@@ -174,7 +175,7 @@ const TOOLS: ToolDef[] = [
     name: 'create_report',
     title: 'Create a report',
     description:
-      'Create a Looker Studio report connected to a BigQuery table or view, or to a custom query: pass sql (and optionally source_name) instead of dataset_id and table_id.',
+      'Create a Looker Studio report connected to a BigQuery table or view, or to a custom query: pass sql (and optionally source_name) instead of dataset_id and table_id. Other connectors: connector google_sheets (spreadsheet, worksheet, options, range) or postgresql/mysql (host, port, database, user, password, ssl, and table_id or sql).',
     schema: schemas.createReportSchema,
     write: true,
     run: handleCreateReport,
@@ -183,7 +184,7 @@ const TOOLS: ToolDef[] = [
     name: 'add_data_source',
     title: 'Add a data source',
     description:
-      'Connect another BigQuery table or view to an existing report, or a custom query: pass sql instead of dataset_id and table_id. project_id is then the billing project; source_name names the data source (Looker Studio otherwise names it after the first table in the query).',
+      'Connect another BigQuery table or view to an existing report, or a custom query: pass sql instead of dataset_id and table_id. project_id is then the billing project; source_name names the data source (Looker Studio otherwise names it after the first table in the query). Other connectors: connector google_sheets (spreadsheet URL or id, worksheet, use_first_row_as_headers, include_hidden_and_filtered_cells, range) or postgresql/mysql (host, port, database, user, password, ssl, and table_id or sql).',
     schema: schemas.addDataSourceSchema,
     write: true,
     run: handleAddDataSource,
@@ -416,6 +417,15 @@ const TOOLS: ToolDef[] = [
     schema: schemas.deleteReportSchema,
     write: true,
     run: handleDeleteReport,
+  },
+  {
+    name: 'add_community_viz',
+    title: 'Add a community visualization',
+    description:
+      'Insert a community visualization from the Community Gallery by its card name (e.g. "Gauge", "Sunburst Chart"), or your own by manifest_path (gs://...). Accepts its consent prompt, then sets data source, dimensions, metrics, other Setup slots (fields), filters, title, style and layout like add_chart.',
+    schema: schemas.addCommunityVizSchema,
+    write: true,
+    run: handleAddCommunityViz,
   },
 ];
 

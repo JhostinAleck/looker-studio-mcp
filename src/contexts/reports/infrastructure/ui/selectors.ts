@@ -348,3 +348,48 @@ export const SEL = {
 export function cssEscape(value: string): string {
   return value.replace(/["\\]/g, '\\$&');
 }
+
+// ── Connectors ──────────────────────────────────────────────────────────
+// "Add data to report" gallery and the forms of Looker Studio's own connectors.
+export const CONNECTOR_SEL = {
+  tile: (label: string) => `span.title-text:text-is("${cssEscape(label)}")`,
+  // Google's OAuth popup: account chooser rows and the consent button.
+  oauthAccount: (email: string) => `[data-identifier="${cssEscape(email)}"]`,
+  oauthAnyAccount: '[data-identifier]',
+  oauthApprove: '#submit_approve_access',
+  // Google Sheets: left list ("Url"), the URL box, the worksheet column and options.
+  sheetsSourceList: 'div.list-display-name',
+  sheetsUrlInput: 'input[formcontrolname="urlOrSheetIDControl"]',
+  sheetsWorksheet: 'div.display-property',
+  sheetsOption: (control: 'hasHeader' | 'includeHiddenCells' | 'includeSpecificRange') =>
+    `mat-checkbox[formcontrolname="${control}"]`,
+  sheetsRangeInput: 'input[placeholder^="Example - "]',
+  // PostgreSQL / MySQL "Basic" form.
+  dbInput: (control: 'hostNameOrIp' | 'port' | 'database' | 'username' | 'password') =>
+    `input[formcontrolname="${control}"]`,
+  // Certificate rows: a file name box with a hint ("Server certificate") and an upload button.
+  dbUploadButton: 'button.upload-button',
+} as const;
+
+export const SHEETS_URL_OPTION = 'Url';
+export const DB_SSL_LABEL = 'Enable SSL';
+export const DB_CLIENT_AUTH_LABEL = 'Enable client authentication';
+export const DB_CERTIFICATE_HINT = {
+  serverCertificate: 'Server certificate',
+  clientCertificate: 'Client certificate',
+  clientKey: 'Client private key',
+} as const;
+
+// ── Community visualizations ────────────────────────────────────────────
+// Toolbar menu (featured cards), the Community Gallery panel, its "Build your
+// own visualization" page and the consent dialog of third-party visualizations.
+export const COMMUNITY_SEL = {
+  toolbarButton: 'Community visualizations and components',
+  cardName: 'div.card-name',
+  exploreMore: '+ Explore more',
+  buildYourOwn: 'Build your own visualization',
+  manifestInput: 'input[name="manifestPath"]',
+  manifestError: '.add-by-id-error',
+  consentTitle: 'Grant consent',
+  panelTitle: /^Community visualization/,
+} as const;
