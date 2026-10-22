@@ -8,8 +8,8 @@ Pass `sql` instead of `dataset_id` and `table_id`:
 
 ```json
 {
-  "report_id": "ea5c49bf-2a70-4210-bbd1-a54a7af50b42",
-  "sql": "SELECT platform, CAST(COUNT(*) AS INT64) AS events FROM `campusfind-26ac2.campusfind_analytics.bq_feature_usage` GROUP BY platform",
+  "report_id": "<report id or URL>",
+  "sql": "SELECT platform, CAST(COUNT(*) AS INT64) AS events FROM `my-project.analytics.events` GROUP BY platform",
   "source_name": "Events by platform"
 }
 ```
@@ -17,7 +17,7 @@ Pass `sql` instead of `dataset_id` and `table_id`:
 | Field | Meaning |
 |---|---|
 | `sql` | A GoogleSQL `SELECT`. Use fully qualified table names (`project.dataset.table`). |
-| `project_id` | The **billing project** the query runs in. Defaults to `project_id` in the config. It must be in the account's billing project list in the BigQuery connector. |
+| `project_id` | The **billing project** the query runs in. Optional: without it the MCP uses `project_id` from the config (`~/.looker-studio-mcp/config.yaml`), and fails if neither is set. It must be in the account's billing project list in the BigQuery connector. |
 | `source_name` | Name of the data source in the report. Only with `sql`. |
 
 Giving `sql` together with `dataset_id` or `table_id`, or `source_name` without `sql`, is an error.

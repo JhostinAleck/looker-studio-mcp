@@ -34,7 +34,7 @@ const placed = { index: 0, kind: 'Text properties', layout: { x: 0, y: 0, width:
 function fakeRepo(): ReportRepository {
   return {
     listReports: vi.fn(async () => [
-      { id: ID, name: 'CampusFind - BQs', url: 'u1' },
+      { id: ID, name: 'Sales - KPIs', url: 'u1' },
       { id: '2a2b3c4d-0000-4000-8000-1234567890ab', name: 'Other', url: 'u2' },
     ]),
     createReport: vi.fn(),
@@ -74,8 +74,8 @@ function fakeRepo(): ReportRepository {
 
 describe('report use cases', () => {
   it('filters reports by name, ignoring case', async () => {
-    expect((await listReports(fakeRepo(), 'campus')).map((r) => r.name)).toEqual([
-      'CampusFind - BQs',
+    expect((await listReports(fakeRepo(), 'sales')).map((r) => r.name)).toEqual([
+      'Sales - KPIs',
     ]);
   });
 
@@ -120,7 +120,7 @@ describe('report use cases', () => {
     const repo = fakeRepo();
     await expect(deleteReport(repo, ID, 'Other')).rejects.toThrow(ReportNameMismatchError);
     expect(repo.deleteReport).not.toHaveBeenCalled();
-    await deleteReport(repo, ID, 'CampusFind - BQs');
+    await deleteReport(repo, ID, 'Sales - KPIs');
     expect(repo.deleteReport).toHaveBeenCalledWith(ID);
   });
 

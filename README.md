@@ -5,7 +5,7 @@ MCP server that lets an AI assistant build **Looker Studio** (formerly Data Stud
 Looker Studio has no public API to edit reports, so the report tools drive the real Looker Studio editor in a dedicated, signed-in Chrome profile (Playwright). BigQuery goes through its REST API.
 
 ```
-"Build a dark dashboard for campusfind_analytics.bq_feature_usage:
+"Build a dark dashboard for analytics.events:
  a header band, three KPI cards, uses per feature as bars, the share as a donut
  and a table at the bottom."
 ```

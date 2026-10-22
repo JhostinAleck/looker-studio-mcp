@@ -13,7 +13,7 @@ const projectId = z
   .string()
   .optional()
   .describe('Google Cloud project id. Defaults to project_id in the config.');
-const datasetId = z.string().describe('BigQuery dataset id, e.g. campusfind_analytics');
+const datasetId = z.string().describe('BigQuery dataset id, e.g. analytics');
 const reportId = z.string().describe('Report id or any URL of the report');
 const page = z
   .number()

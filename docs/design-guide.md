@@ -49,7 +49,7 @@ For a light report: theme `Simple`, background `#F6F7FB`, cards `#FFFFFF` with `
 ```json
 {"tool": "add_shape", "shape": "rectangle", "background": "#111833", "border_radius": 0,
  "layout": {"x": 0, "y": 0, "width": 1200, "height": 100}, "style": {"Border color": "#111833"}}
-{"tool": "add_text", "text": "CampusFind", "font_size": 32, "color": "#FFFFFF", "bold": true,
+{"tool": "add_text", "text": "My dashboard", "font_size": 32, "color": "#FFFFFF", "bold": true,
  "layout": {"x": 40, "y": 14, "width": 400, "height": 50}}
 ```
 

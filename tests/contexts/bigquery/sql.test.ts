@@ -30,8 +30,8 @@ describe('isReadOnlyQuery', () => {
 
 describe('identifiers', () => {
   it('accepts real project and dataset ids', () => {
-    expect(assertProjectId('campusfind-26ac2')).toBe('campusfind-26ac2');
-    expect(assertName('Dataset', 'campusfind_analytics')).toBe('campusfind_analytics');
+    expect(assertProjectId('my-project-123')).toBe('my-project-123');
+    expect(assertName('Dataset', 'analytics')).toBe('analytics');
   });
 
   it('rejects injection attempts', () => {
@@ -43,12 +43,12 @@ describe('identifiers', () => {
 describe('viewDdl', () => {
   it('builds a CREATE OR REPLACE VIEW with an escaped description', () => {
     const ddl = viewDdl(
-      { projectId: 'campusfind-26ac2', datasetId: 'a', tableId: 'v' },
+      { projectId: 'my-project-123', datasetId: 'a', tableId: 'v' },
       'SELECT 1;\n',
-      "Jhostin's BQ",
+      "Team's BQ",
     );
     expect(ddl).toBe(
-      "CREATE OR REPLACE VIEW `campusfind-26ac2.a.v`\nOPTIONS (description = 'Jhostin\\'s BQ')\nAS\nSELECT 1",
+      "CREATE OR REPLACE VIEW `my-project-123.a.v`\nOPTIONS (description = 'Team\\'s BQ')\nAS\nSELECT 1",
     );
   });
 
