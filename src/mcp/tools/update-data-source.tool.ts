@@ -4,9 +4,10 @@ import { updateDataSourceSchema } from '@/mcp/schemas.js';
 import { runWrite, text, type ToolResult, type WriteDeps } from '@/mcp/tool-helpers.js';
 
 import type { ReportToolDeps } from './reports-deps.js';
+import { checkQuerySource, type SourceCheckDeps } from './source-check.js';
 
 export async function handleUpdateDataSource(
-  deps: ReportToolDeps & WriteDeps,
+  deps: ReportToolDeps & WriteDeps & SourceCheckDeps,
   raw: unknown,
 ): Promise<ToolResult> {
   const input = updateDataSourceSchema.parse(raw);
@@ -16,6 +17,10 @@ export async function handleUpdateDataSource(
     ...(input.credentials ? { credentials: input.credentials } : {}),
     ...(input.freshness ? { freshness: input.freshness } : {}),
   };
+  // The data source's billing project is only known in the editor: dry-run in
+  // the given or default project, so a broken query fails before Looker opens.
+  const project = input.project_id ?? deps.defaultProject;
+  if (change.sql && project) await checkQuerySource(deps, { projectId: project, sql: change.sql });
   const what = Object.keys(change).join(', ') || 'nothing';
   return runWrite(
     deps,

@@ -884,6 +884,12 @@ export const updateDataSourceSchema = z.object({
     .min(1)
     .optional()
     .describe('Custom queries only: the new SQL (Edit Connection › Reconnect)'),
+  project_id: z
+    .string()
+    .optional()
+    .describe(
+      'With sql: project to dry-run the new SQL in first. Defaults to project_id in the config; without either the SQL is not dry-run.',
+    ),
   credentials: z
     .enum(CREDENTIALS)
     .optional()
