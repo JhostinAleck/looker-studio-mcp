@@ -225,7 +225,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     return this.edit(reportId, async (editor) => {
       const page = editor.page;
       await editor.clickMenu('Resource', ['Manage added data sources']);
-      await page.locator('tr, [role=row]').nth(1).waitFor({ timeout: this.opts.stepTimeoutMs });
+      await this.waitForSourceRows(editor);
       const sources = await this.listedSources(editor);
       await this.closeSourcesPanel(editor);
       const targets = name ? sources.filter((s) => s === name) : sources;
@@ -680,7 +680,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   private async openSourceEditor(editor: LookerStudioEditor, name?: string): Promise<void> {
     const page = editor.page;
     await editor.clickMenu('Resource', ['Manage added data sources']);
-    await page.locator('tr, [role=row]').nth(1).waitFor({ timeout: this.opts.stepTimeoutMs });
+    await this.waitForSourceRows(editor);
     const sources = await this.listedSources(editor);
     const source = name ?? (sources.length === 1 ? sources[0] : undefined);
     if (!source || !sources.includes(source)) {
@@ -716,7 +716,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   private async renameNewestSource(editor: LookerStudioEditor, name: string): Promise<void> {
     const page = editor.page;
     await editor.clickMenu('Resource', ['Manage added data sources']);
-    await page.locator('tr, [role=row]').nth(1).waitFor({ timeout: this.opts.stepTimeoutMs });
+    await this.waitForSourceRows(editor);
     await editor.step(`name the new data source "${name}"`, async () => {
       const found = await page.evaluate(() => {
         let best: { n: number; name: string; x: number; y: number } | null = null;
@@ -757,6 +757,15 @@ export class LookerStudioUiReportRepository implements ReportRepository {
 
   // Escape no longer closes the Data sources panel, and the open panel covers
   // the menu bar: close it with its CLOSE button.
+  // The Data sources panel can spin for a minute on a report that was just
+  // created or changed: give its rows longer than a normal step.
+  private async waitForSourceRows(editor: LookerStudioEditor): Promise<void> {
+    await editor.page
+      .locator('tr, [role=row]')
+      .nth(1)
+      .waitFor({ timeout: this.opts.stepTimeoutMs * 3 });
+  }
+
   private async closeSourcesPanel(editor: LookerStudioEditor): Promise<void> {
     const close = editor.page.getByRole('button', { name: /^close$/i }).first();
     if (await close.isVisible().catch(() => false)) await close.click();
@@ -2379,10 +2388,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   private async openSourcesPanel(editor: LookerStudioEditor): Promise<void> {
     await this.declineConsent(editor, 1_500);
     await editor.clickMenu('Resource', ['Manage added data sources']);
-    await editor.page
-      .locator('tr, [role=row]')
-      .nth(1)
-      .waitFor({ timeout: this.opts.stepTimeoutMs });
+    await this.waitForSourceRows(editor);
     await editor.settle(500);
   }
 
@@ -2441,10 +2447,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         .getByRole('button', { name: 'Done', exact: true })
         .first()
         .click({ timeout: this.opts.stepTimeoutMs });
-      await editor.page
-        .locator('tr, [role=row]')
-        .nth(1)
-        .waitFor({ timeout: this.opts.stepTimeoutMs });
+      await this.waitForSourceRows(editor);
       await editor.settle(800);
     });
   }
@@ -2617,7 +2620,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       );
       const parts = found.links.map(parseConsoleLink);
       await page.getByRole('button', { name: 'Cancel', exact: true }).first().click();
-      await page.locator('tr, [role=row]').nth(1).waitFor({ timeout: this.opts.stepTimeoutMs });
+      await this.waitForSourceRows(editor);
       await editor.settle(500);
       if (found.sql !== null) {
         const billing = parts.find((p) => p.project && !p.dataset)?.project;
