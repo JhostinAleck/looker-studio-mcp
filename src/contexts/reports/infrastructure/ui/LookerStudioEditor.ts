@@ -1005,10 +1005,36 @@ export class LookerStudioEditor {
       const custom = await find('custom');
       if (custom) {
         await this.page.mouse.click(custom.x, custom.y);
+        // Custom's tooltip opens to its right while hovered, over the picker
+        // that is then scrolled to the same line, and swallows its click.
+        await this.page.mouse.move(0, 0);
         await sleep(700);
       }
       const picker = await find('picker');
-      if (!picker) throw new Error('the Setup tab has no date range picker');
+      if (!picker) {
+        const section = await this.page
+          .locator(SEL.propertiesPanel)
+          .first()
+          .getByText(/^\s*Default date range/)
+          .count();
+        // Page and report settings only offer a default date range once they
+        // have a date range dimension; a custom query that takes the dates as
+        // parameters has no date field to be one.
+        throw new Error(
+          section
+            ? 'the Setup tab has no date range picker'
+            : 'there is no "Default date range" here: page and report settings need a date range dimension first (date_range_dimension, a date field of one of the data sources; a custom query with date range parameters has none, but it still follows the page or report range)',
+        );
+      }
+      await this.page
+        .waitForFunction(
+          ({ x, y }) => !!document.elementFromPoint(x, y)?.closest('button.ng2-date-picker-button'),
+          picker,
+          { timeout: 3000 },
+        )
+        .catch(() => {
+          throw new Error('something covers the date range picker');
+        });
       await this.page.mouse.click(picker.x, picker.y);
       await this.pickInDatePopup(path, fixed ? [fixed[1]!, fixed[2]!] : undefined);
     });
