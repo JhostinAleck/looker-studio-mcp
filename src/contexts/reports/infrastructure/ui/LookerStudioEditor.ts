@@ -1788,9 +1788,9 @@ export class LookerStudioEditor {
           .toString()
           .split(/\s+/)
           .find((k) => k && !k.startsWith('lego-'));
-        // Tables have their own "No data" row; other charts write it as text.
+        // Tables keep a hidden "No data" row; other charts write it as text.
         const noData =
-          !!node.querySelector(c.noData) ||
+          [...node.querySelectorAll(c.noData)].some(visible) ||
           [...node.querySelectorAll('*')].some(
             (e) => e.children.length === 0 && e.textContent?.trim() === c.noDataText && visible(e),
           );
