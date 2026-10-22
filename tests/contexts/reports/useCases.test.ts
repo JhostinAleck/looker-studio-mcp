@@ -23,6 +23,10 @@ import {
   setTheme,
   shareReport,
   updateComponent,
+  listDataSources,
+  removeDataSource,
+  updateDataSource,
+  updateField,
 } from '@/contexts/reports/application/reportUseCases.js';
 import type { ReportRepository } from '@/contexts/reports/domain/ReportRepository.js';
 import { InvalidChartError, InvalidReportIdError } from '@/contexts/reports/domain/Report.js';
@@ -70,6 +74,22 @@ function fakeRepo(): ReportRepository {
     screenshot: vi.fn(),
     deleteReport: vi.fn(async () => undefined),
     addCommunityViz: vi.fn(async () => placed),
+    listDataSources: vi.fn(async () => []),
+    removeDataSource: vi.fn(async (_id: string, ref: string) => ({
+      name: ref,
+      alias: 'ds0',
+      connector: 'BigQuery',
+      scope: 'Embedded',
+      usedIn: '0 charts, 0 variables',
+      status: 'Working',
+    })),
+    updateDataSource: vi.fn(async () => []),
+    updateField: vi.fn(async () => ({
+      name: 'events',
+      type: 'Number',
+      aggregation: 'Sum',
+      kind: 'dimension' as const,
+    })),
   };
 }
 
@@ -325,5 +345,22 @@ describe('report use cases', () => {
       joins: [{ type: 'inner', keys: [['uid', 'uid']] }],
     });
     expect(repo.createBlend).toHaveBeenCalled();
+  });
+
+  it('passes data source refs trimmed and validates changes before editing', async () => {
+    const repo = fakeRepo();
+    await listDataSources(repo, ID, { ref: ' ds1 ' });
+    expect(repo.listDataSources).toHaveBeenCalledWith(ID, { ref: 'ds1', fields: false });
+    await removeDataSource(repo, ID, ' events ');
+    expect(repo.removeDataSource).toHaveBeenCalledWith(ID, 'events', false);
+    await expect(updateDataSource(repo, ID, 'ds0', {})).rejects.toThrow(InvalidChartError);
+    await updateDataSource(repo, ID, 'ds0', { sql: ' SELECT 1 ', credentials: 'viewer' });
+    expect(repo.updateDataSource).toHaveBeenCalledWith(ID, 'ds0', {
+      sql: 'SELECT 1',
+      credentials: 'viewer',
+    });
+    await expect(updateField(repo, ID, 'events', {})).rejects.toThrow(InvalidChartError);
+    await updateField(repo, ID, 'events', { type: 'Number' }, ' ');
+    expect(repo.updateField).toHaveBeenCalledWith(ID, undefined, 'events', { type: 'Number' });
   });
 });

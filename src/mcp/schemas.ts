@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import {
+  CREDENTIALS,
+  FIELD_AGGREGATIONS,
+  FRESHNESS,
+} from '@/contexts/reports/domain/DataSource.js';
 import { AGGREGATIONS, CHART_TYPES, CONTROL_KINDS } from '@/contexts/reports/domain/Report.js';
 import {
   ARRANGE_ACTIONS,
@@ -843,4 +848,59 @@ export const checkReportSchema = z.object({
     .max(300)
     .default(30)
     .describe('How long to wait per page for charts to load before reporting them as loading'),
+});
+
+// ── data sources ──
+const dataSourceRef = z
+  .string()
+  .min(1)
+  .describe('Data source name, or its alias (ds0, ds1…) when several share a name');
+
+export const listDataSourcesSchema = z.object({
+  report_id: reportId,
+  data_source: dataSourceRef.optional().describe('Only this data source; all when omitted'),
+  fields: z
+    .boolean()
+    .default(false)
+    .describe('Also list every field with its type and default aggregation'),
+});
+
+export const removeDataSourceSchema = z.object({
+  report_id: reportId,
+  data_source: dataSourceRef,
+  force: z
+    .boolean()
+    .default(false)
+    .describe('Remove it even if charts use it (Looker Studio leaves them broken)'),
+});
+
+export const updateDataSourceSchema = z.object({
+  report_id: reportId,
+  data_source: dataSourceRef,
+  name: z.string().min(1).optional().describe('New name of the data source'),
+  sql: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Custom queries only: the new SQL (Edit Connection › Reconnect)'),
+  credentials: z
+    .enum(CREDENTIALS)
+    .optional()
+    .describe("owner: the data source reads with its owner's access; viewer: each viewer's own"),
+  freshness: z.enum(FRESHNESS).optional().describe('How often Looker Studio re-reads the data'),
+});
+
+export const updateFieldSchema = z.object({
+  report_id: reportId,
+  data_source: dataSourceRef.optional().describe('Needed when the report has several'),
+  field: z.string().min(1).describe('Current field name, as the data source editor shows it'),
+  type: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Number, Percent, Duration, Text, Boolean, Date, Date & Time, Year Month, Country, City, URL… or a menu path such as "Currency > EUR"',
+    ),
+  aggregation: z.enum(FIELD_AGGREGATIONS).optional().describe('Default aggregation'),
+  name: z.string().min(1).optional().describe('New field name'),
 });

@@ -14,6 +14,13 @@ import type {
   ReportSummary,
   StyleSettings,
 } from './Report.js';
+import type {
+  DataSourceChange,
+  DataSourceField,
+  DataSourceInfo,
+  DataSourceRow,
+  FieldChange,
+} from './DataSource.js';
 
 export interface ReportPage {
   index: number;
@@ -308,4 +315,22 @@ export interface ReportRepository {
   // Waits up to `timeoutMs` per page for the charts to load and reports what
   // each one shows instead of data. Every page unless `page` is given.
   checkReport(reportId: string, opts: { page?: number; timeoutMs: number }): Promise<ReportCheck>;
+
+  // ── data sources ──
+  // `ref` is a data source name or alias (ds0, ds1…); `fields` also reads each field.
+  listDataSources(
+    reportId: string,
+    opts?: { ref?: string; fields?: boolean },
+  ): Promise<DataSourceInfo[]>;
+  // Refuses a data source that charts still use unless `force`.
+  removeDataSource(reportId: string, ref: string, force: boolean): Promise<DataSourceRow>;
+  // Returns notes on what changed (new or removed fields after a new SQL).
+  updateDataSource(reportId: string, ref: string, change: DataSourceChange): Promise<string[]>;
+  // The field after the change. `ref` may be omitted when the report has one data source.
+  updateField(
+    reportId: string,
+    ref: string | undefined,
+    field: string,
+    change: FieldChange,
+  ): Promise<DataSourceField>;
 }

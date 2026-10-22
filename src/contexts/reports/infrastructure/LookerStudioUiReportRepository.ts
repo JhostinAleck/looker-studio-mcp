@@ -30,6 +30,21 @@ import {
   classifyChartError,
 } from '@/contexts/reports/domain/Report.js';
 import {
+  type DataSourceChange,
+  type DataSourceField,
+  type DataSourceInfo,
+  type DataSourceRow,
+  type FieldChange,
+  DataSourceInUseError,
+  DataSourceNotFoundError,
+  chartsUsing,
+  fieldTypePath,
+  findDataSource,
+  isUsed,
+  parseConnectionChanges,
+  parseConsoleLink,
+} from '@/contexts/reports/domain/DataSource.js';
+import {
   type Aggregation,
   type ChartSpec,
   type ChartType,
@@ -59,6 +74,10 @@ import {
   CHART_PRESETS,
   COMMUNITY_SEL,
   CONTROL_LABELS,
+  CREDENTIALS_LABEL,
+  DATA_SOURCE,
+  FIELD_AGGREGATION_LABEL,
+  FRESHNESS_LABEL,
   FILTER_CONDITIONS,
   HL,
   PAGE_MENU,
@@ -68,6 +87,7 @@ import {
   SEL,
   SHAPE_PATHS,
   cssEscape,
+  escapeRegExp,
   sectionNamed,
 } from './ui/selectors.js';
 
@@ -2110,5 +2130,553 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     } catch {
       return { kind: type ?? 'chart', fields: [] };
     }
+  }
+
+  // ── data sources ──
+  // Resource › Manage added data sources lists them; Edit opens the data source
+  // editor (fields, credentials, freshness) and its Edit Connection page (table or SQL).
+
+  async listDataSources(
+    reportId: string,
+    opts: { ref?: string; fields?: boolean } = {},
+  ): Promise<DataSourceInfo[]> {
+    return this.edit(reportId, async (editor) => {
+      await this.openSourcesPanel(editor);
+      const rows = await this.readSourceRows(editor);
+      const targets = opts.ref ? [findDataSource(rows, opts.ref)] : rows;
+      const out: DataSourceInfo[] = [];
+      for (const row of targets) {
+        const info: DataSourceInfo = { ...row, charts: chartsUsing(row.usedIn), kind: 'other' };
+        await this.editListedSource(editor, row);
+        Object.assign(info, await this.readSourceHeader(editor));
+        if (opts.fields) info.fields = await this.readSourceFields(editor);
+        // Reading the connection ends in the Data sources panel.
+        if (/bigquery/i.test(row.connector)) Object.assign(info, await this.readConnection(editor));
+        else await this.leaveSourceEditor(editor, false);
+        out.push(info);
+      }
+      await this.closeSourcesPanel(editor);
+      return out;
+    });
+  }
+
+  async removeDataSource(reportId: string, ref: string, force: boolean): Promise<DataSourceRow> {
+    const { row, removed } = await this.edit(reportId, async (editor) => {
+      const page = editor.page;
+      await this.openSourcesPanel(editor);
+      const row = findDataSource(await this.readSourceRows(editor), ref);
+      if (isUsed(row.usedIn) && !force) {
+        await this.closeSourcesPanel(editor);
+        return { row, removed: false };
+      }
+      await editor.step(`remove the data source ${row.name} (${row.alias})`, async () => {
+        await (
+          await this.sourceRow(editor, row.alias)
+        )
+          .getByRole('button', { name: /^remove$/i })
+          .click();
+        // The same dialog warns when charts use the source; they are left broken.
+        const dialog = page.locator('mat-dialog-container', {
+          hasText: 'You are removing a data source',
+        });
+        await dialog.waitFor({ timeout: this.opts.stepTimeoutMs });
+        await dialog.getByRole('button', { name: /^remove data source$/i }).click();
+        await dialog.waitFor({ state: 'detached', timeout: this.opts.stepTimeoutMs });
+        await editor.settle(1500);
+        const left = await this.readSourceRows(editor);
+        if (left.some((r) => r.alias === row.alias)) throw new Error('it is still listed');
+      });
+      await this.closeSourcesPanel(editor);
+      return { row, removed: true };
+    });
+    // Refused outside the editor visit: it is an answer, not a failed step.
+    if (!removed) throw new DataSourceInUseError(row);
+    return row;
+  }
+
+  async updateDataSource(
+    reportId: string,
+    ref: string,
+    change: DataSourceChange,
+  ): Promise<string[]> {
+    return this.edit(reportId, async (editor) => {
+      const page = editor.page;
+      await this.openSourcesPanel(editor);
+      const row = findDataSource(await this.readSourceRows(editor), ref);
+      await this.editListedSource(editor, row);
+      const notes: string[] = [];
+      if (change.sql !== undefined) notes.push(...(await this.replaceSql(editor, change.sql)));
+      if (change.name !== undefined) {
+        await editor.step(`rename the data source to "${change.name}"`, async () => {
+          const box = page.locator(SEL.dataSourceNameInput).filter({ visible: true });
+          const index = await box.evaluateAll(
+            (inputs, current) => inputs.findIndex((i) => (i as HTMLInputElement).value === current),
+            row.name,
+          );
+          if (index < 0) throw new Error('the data source name box was not found');
+          await box.nth(index).fill(change.name!);
+          await box.nth(index).press('Enter');
+          await editor.settle(800);
+        });
+      }
+      if (change.credentials) {
+        const label = CREDENTIALS_LABEL[change.credentials];
+        await editor.step(`set the data credentials to ${label}`, async () => {
+          await page.getByRole('button', { name: DATA_SOURCE.credentialsButton }).click();
+          const dialog = page.locator('mat-dialog-container', {
+            hasText: 'Update data credentials',
+          });
+          await dialog.waitFor({ timeout: this.opts.stepTimeoutMs });
+          await dialog.locator('mat-radio-button', { hasText: label }).click();
+          await dialog.getByRole('button', { name: /^update$/i }).click();
+          await dialog.waitFor({ state: 'detached', timeout: this.opts.stepTimeoutMs });
+          await editor.settle(1000);
+          if (await this.declineConsent(editor, 5_000))
+            notes.push(
+              'With viewer credentials Looker Studio asks every viewer, editors included, to grant consent ("Grant consent") before it loads data.',
+            );
+        });
+      }
+      if (change.freshness) {
+        const label = FRESHNESS_LABEL[change.freshness];
+        await editor.step(`set the data freshness to ${label}`, async () => {
+          await page.getByRole('button', { name: DATA_SOURCE.freshnessButton }).click();
+          const dialog = page.locator(DATA_SOURCE.freshnessDialog);
+          await dialog.waitFor({ timeout: this.opts.stepTimeoutMs });
+          await dialog
+            .locator('md-radio-button')
+            .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(label)}\\s*(Default)?\\s*$`) })
+            .click();
+          await dialog.getByRole('button', { name: /set data freshness/i }).click();
+          await dialog.waitFor({ state: 'detached', timeout: this.opts.stepTimeoutMs });
+          await editor.settle(1000);
+        });
+      }
+      const after = await this.readSourceHeader(editor);
+      if (change.credentials) notes.push(`Data credentials: ${after.credentials ?? '?'}`);
+      if (change.freshness) notes.push(`Data freshness: ${after.freshness ?? '?'}`);
+      await this.leaveSourceEditor(editor, true);
+      await this.closeSourcesPanel(editor);
+      return notes;
+    });
+  }
+
+  async updateField(
+    reportId: string,
+    ref: string | undefined,
+    field: string,
+    change: FieldChange,
+  ): Promise<DataSourceField> {
+    return this.edit(reportId, async (editor) => {
+      const page = editor.page;
+      await this.openSourcesPanel(editor);
+      const rows = await this.readSourceRows(editor);
+      if (!ref && rows.length !== 1) {
+        await this.closeSourcesPanel(editor);
+        throw new DataSourceNotFoundError(
+          `The report has several data sources; pass data_source: ${rows.map((r) => `${r.name} (${r.alias})`).join(', ')}.`,
+        );
+      }
+      const row = ref ? findDataSource(rows, ref) : rows[0]!;
+      await this.editListedSource(editor, row);
+      const fieldRow = await this.findFieldRow(editor, field);
+      if (change.type) {
+        const path = fieldTypePath(change.type);
+        await editor.step(`set the type of ${field} to ${path.join(' › ')}`, async () => {
+          const dropdown = fieldRow.getByRole('button', { name: DATA_SOURCE.typeDropdown });
+          if (!(await dropdown.isVisible())) throw new Error('the type of this field is fixed');
+          await dropdown.click();
+          await this.pickMdMenu(editor, path);
+          await editor.settle(1500);
+        });
+      }
+      if (change.aggregation) {
+        const label = FIELD_AGGREGATION_LABEL[change.aggregation];
+        await editor.step(`set the aggregation of ${field} to ${label}`, async () => {
+          const dropdown = fieldRow.getByRole('button', { name: DATA_SOURCE.aggregationDropdown });
+          if (!(await dropdown.isVisible()))
+            throw new Error(
+              `the aggregation of a ${await this.fieldType(fieldRow)} field cannot be changed (change its type to Number first)`,
+            );
+          await dropdown.click();
+          await this.pickMdMenu(editor, [label]);
+          await editor.settle(1500);
+        });
+      }
+      let current = field;
+      if (change.name) {
+        await editor.step(`rename the field ${field} to "${change.name}"`, async () => {
+          await fieldRow.locator(DATA_SOURCE.fieldName).click();
+          await page.keyboard.press('ControlOrMeta+A');
+          await page.keyboard.type(change.name!);
+          await page.keyboard.press('Enter');
+          await editor.settle(1200);
+        });
+        current = change.name;
+      }
+      const result = (await this.readSourceFields(editor)).find((f) => f.name === current);
+      await this.leaveSourceEditor(editor, true);
+      await this.closeSourcesPanel(editor);
+      if (!result) throw new EditorStepError(`the field ${current} is not listed after the change`);
+      return result;
+    });
+  }
+
+  // Viewer's credentials make Looker Studio ask the signed-in account for consent
+  // to read data as itself, over the whole editor. It is each viewer's own
+  // choice, so it is declined, not granted.
+  private async declineConsent(editor: LookerStudioEditor, timeoutMs: number): Promise<boolean> {
+    const consent = editor.page.locator('mat-dialog-container, [role=dialog]', {
+      hasText: 'Grant consent',
+    });
+    const shown = await consent
+      .first()
+      .waitFor({ timeout: timeoutMs })
+      .then(
+        () => true,
+        () => false,
+      );
+    if (!shown) return false;
+    await consent
+      .first()
+      .getByRole('button', { name: /^cancel$/i })
+      .click();
+    await editor.settle(800);
+    return true;
+  }
+
+  private async openSourcesPanel(editor: LookerStudioEditor): Promise<void> {
+    await this.declineConsent(editor, 1_500);
+    await editor.clickMenu('Resource', ['Manage added data sources']);
+    await editor.page
+      .locator('tr, [role=row]')
+      .nth(1)
+      .waitFor({ timeout: this.opts.stepTimeoutMs });
+    await editor.settle(500);
+  }
+
+  // The Type chip (Embedded/Reusable) has no cell of its own: cells are told
+  // apart by content, not by position.
+  private async readSourceRows(editor: LookerStudioEditor): Promise<DataSourceRow[]> {
+    const rows = await editor.page.evaluate(() => {
+      const text = (e: Element | undefined) => e?.textContent?.trim().replace(/\s+/g, ' ') ?? '';
+      return [...document.querySelectorAll('tr, [role=row]')].slice(1).map((r) => {
+        const cells = [...r.querySelectorAll('td, [role=cell]')].map((c) => text(c));
+        const used = cells.findIndex((c) => /\d+\s+charts?\b/i.test(c));
+        return {
+          name: cells[0] ?? '',
+          alias: cells.at(-1) ?? '',
+          connector: cells[1] ?? '',
+          scope: /\b(Embedded|Reusable)\b/i.exec((r as HTMLElement).innerText)?.[1] ?? '',
+          usedIn: used >= 0 ? cells[used]! : '',
+          status: used >= 0 ? (cells[used + 1] ?? '') : '',
+        };
+      });
+    });
+    return rows.filter((r) => r.name && /^ds\d+$/.test(r.alias));
+  }
+
+  private async sourceRow(editor: LookerStudioEditor, alias: string): Promise<Locator> {
+    const index = await editor.page.evaluate(
+      (wanted) =>
+        [...document.querySelectorAll('tr, [role=row]')].findIndex(
+          (r) => [...r.querySelectorAll('td, [role=cell]')].at(-1)?.textContent?.trim() === wanted,
+        ),
+      alias,
+    );
+    if (index < 0) throw new Error(`the data source ${alias} is not listed`);
+    return editor.page.locator('tr, [role=row]').nth(index);
+  }
+
+  // From the Data sources panel into the editor of one row.
+  private async editListedSource(editor: LookerStudioEditor, row: DataSourceRow): Promise<void> {
+    await editor.step(`edit the data source ${row.name} (${row.alias})`, async () => {
+      await (
+        await this.sourceRow(editor, row.alias)
+      )
+        .getByRole('button', { name: /^edit$/i })
+        .click();
+      await editor.page
+        .getByRole('button', { name: 'REFRESH FIELDS' })
+        .waitFor({ timeout: this.opts.stepTimeoutMs });
+      await editor.settle(800);
+    });
+  }
+
+  // Done saves the editor and goes back to the Data sources panel.
+  private async leaveSourceEditor(editor: LookerStudioEditor, save: boolean): Promise<void> {
+    await editor.step(save ? 'save the data source' : 'close the data source', async () => {
+      await editor.page
+        .getByRole('button', { name: 'Done', exact: true })
+        .first()
+        .click({ timeout: this.opts.stepTimeoutMs });
+      await editor.page
+        .locator('tr, [role=row]')
+        .nth(1)
+        .waitFor({ timeout: this.opts.stepTimeoutMs });
+      await editor.settle(800);
+    });
+  }
+
+  // Header buttons read "Data credentials: <owner>" and "Data freshness: 12 hours".
+  private async readSourceHeader(
+    editor: LookerStudioEditor,
+  ): Promise<{ credentials?: string; freshness?: string }> {
+    const page = editor.page;
+    const read = async (name: string | RegExp) => {
+      const button = page.getByRole('button', { name }).first();
+      const value = await button.innerText({ timeout: 3_000 }).catch(() => '');
+      return (
+        value
+          .replace(/\s+/g, ' ')
+          .replace(/^[^:]*:\s*/, '')
+          .trim() || undefined
+      );
+    };
+    const out: { credentials?: string; freshness?: string } = {};
+    // The button names the owner, or says "Viewer".
+    const credentials = await read(DATA_SOURCE.credentialsButton);
+    if (credentials)
+      out.credentials = /^viewer$/i.test(credentials)
+        ? "viewer's credentials"
+        : `owner's credentials (${credentials})`;
+    const freshness = await read(DATA_SOURCE.freshnessButton);
+    if (freshness) out.freshness = freshness;
+    return out;
+  }
+
+  private readSourceFields(editor: LookerStudioEditor): Promise<DataSourceField[]> {
+    return editor.page.evaluate((sel) => {
+      const first = (e: Element | null) =>
+        (e as HTMLElement | null)?.innerText.trim().split('\n')[0]?.trim() ?? '';
+      return [...document.querySelectorAll(sel.fieldRow)].map((r) => {
+        const label = r.querySelector(sel.fieldName);
+        return {
+          name: label?.textContent?.trim() ?? '',
+          type: first(r.querySelector(sel.typeColumn)),
+          aggregation: first(r.querySelector(sel.aggregationColumn)),
+          kind: label?.closest('.metric') ? ('metric' as const) : ('dimension' as const),
+        };
+      });
+    }, DATA_SOURCE);
+  }
+
+  // The field list can be long: filter it with the editor's search box first.
+  private async findFieldRow(editor: LookerStudioEditor, field: string): Promise<Locator> {
+    const page = editor.page;
+    return editor.step(`find the field ${field}`, async () => {
+      const search = page
+        .getByPlaceholder(DATA_SOURCE.searchFields)
+        .filter({ visible: true })
+        .last();
+      if (await search.isVisible().catch(() => false)) {
+        await search.fill(field);
+        await editor.settle(800);
+      }
+      const rows = page.locator(DATA_SOURCE.fieldRow).filter({
+        has: page.locator(DATA_SOURCE.fieldName, {
+          hasText: new RegExp(`^\\s*${escapeRegExp(field)}\\s*$`),
+        }),
+      });
+      if ((await rows.count()) === 0) {
+        if (await search.isVisible().catch(() => false)) await search.fill('');
+        await editor.settle(500);
+        const names = (await this.readSourceFields(editor)).map((f) => f.name);
+        throw new Error(`there is no field "${field}" (fields: ${names.join(', ')})`);
+      }
+      return rows.first();
+    });
+  }
+
+  private async fieldType(row: Locator): Promise<string> {
+    const text = await row
+      .locator(DATA_SOURCE.typeColumn)
+      .innerText()
+      .catch(() => '');
+    return text.trim().split('\n')[0] ?? '';
+  }
+
+  // AngularJS md-menus: the first level opens a submenu on hover, to its right.
+  // A one-part path is a top item or a leaf of any submenu.
+  private async pickMdMenu(editor: LookerStudioEditor, path: string[]): Promise<void> {
+    const page = editor.page;
+    const menus = () =>
+      page.evaluate((sel) => {
+        const shown = (e: Element) => e.getBoundingClientRect().width > 0;
+        return [...document.querySelectorAll(sel)].filter(shown).map((c) =>
+          [...c.querySelectorAll('button')].filter(shown).map((b) => {
+            const r = b.getBoundingClientRect();
+            return {
+              text: b.textContent?.trim().replace(/\s+/g, ' ') ?? '',
+              x: r.x + r.width / 2,
+              y: r.y + r.height / 2,
+            };
+          }),
+        );
+      }, DATA_SOURCE.openMenu);
+    const same = (a: string, b: string) =>
+      a.toLowerCase() === b.toLowerCase() || a.toLowerCase().startsWith(`${b.toLowerCase()} - `);
+    // Closed menus stay in the DOM: wait for a visible one.
+    await page
+      .locator(DATA_SOURCE.openMenu)
+      .filter({ visible: true })
+      .first()
+      .waitFor({ timeout: this.opts.stepTimeoutMs });
+    await editor.settle(400);
+    const top = (await menus())[0] ?? [];
+    const click = async (item: { x: number; y: number }) => page.mouse.click(item.x, item.y);
+    // Hovers a top item; returns its submenu, if it has one.
+    const open = async (item: { x: number; y: number }) => {
+      await page.mouse.move(item.x, item.y);
+      await editor.settle(600);
+      const shown = await menus();
+      return shown.length > 1 ? shown.at(-1)! : null;
+    };
+    // Into a submenu along the row of its parent, so it stays open.
+    const clickLeaf = async (from: { y: number }, leaf: { x: number; y: number }) => {
+      await page.mouse.move(leaf.x, from.y, { steps: 5 });
+      await page.mouse.move(leaf.x, leaf.y, { steps: 5 });
+      await click(leaf);
+    };
+    const [first, second] = path;
+    if (!first) throw new Error('no menu item given');
+    const parent = top.find((i) => same(i.text, first));
+    if (second !== undefined || parent) {
+      if (!parent)
+        throw new Error(`no menu item "${first}" (options: ${top.map((i) => i.text).join(', ')})`);
+      const sub = await open(parent);
+      if (!sub) return click(parent);
+      const wanted = second ?? first;
+      const leaf = sub.find((i) => same(i.text, wanted));
+      if (!leaf)
+        throw new Error(
+          `no "${wanted}" under ${parent.text} (options: ${sub.map((i) => i.text).join(', ')})`,
+        );
+      return clickLeaf(parent, leaf);
+    }
+    for (const item of top) {
+      const sub = await open(item);
+      const leaf = sub?.find((i) => same(i.text, first));
+      if (leaf) return clickLeaf(item, leaf);
+    }
+    await page.keyboard.press('Escape');
+    throw new Error(`no menu item "${first}" (options: ${top.map((i) => i.text).join(', ')})`);
+  }
+
+  // Edit Connection shows the table picked in the BigQuery connector, or the
+  // custom query in a CodeMirror box. Its Cancel closes the data source
+  // editor too, back to the Data sources panel.
+  private async readConnection(
+    editor: LookerStudioEditor,
+  ): Promise<Pick<DataSourceInfo, 'kind' | 'table' | 'sql' | 'billingProject'>> {
+    const page = editor.page;
+    return editor.step('read the connection', async () => {
+      await this.openConnection(editor);
+      const found = await page.evaluate(
+        (sel) => {
+          const host = document.querySelector(sel.customQueryEditor) as
+            (Element & { CodeMirror?: { getValue(): string } }) | null;
+          const visible = !!host && host.getBoundingClientRect().width > 0;
+          const links = [...document.querySelectorAll(sel.selectedOption)].map(
+            (a) => a.getAttribute('href') ?? '',
+          );
+          return { sql: visible ? (host?.CodeMirror?.getValue() ?? null) : null, links };
+        },
+        { customQueryEditor: SEL.customQueryEditor, selectedOption: DATA_SOURCE.selectedOption },
+      );
+      const parts = found.links.map(parseConsoleLink);
+      await page.getByRole('button', { name: 'Cancel', exact: true }).first().click();
+      await page.locator('tr, [role=row]').nth(1).waitFor({ timeout: this.opts.stepTimeoutMs });
+      await editor.settle(500);
+      if (found.sql !== null) {
+        const billing = parts.find((p) => p.project && !p.dataset)?.project;
+        return {
+          kind: 'custom_query' as const,
+          sql: found.sql,
+          ...(billing ? { billingProject: billing } : {}),
+        };
+      }
+      const table = parts.find((p) => p.table);
+      return table
+        ? { kind: 'table' as const, table: `${table.project}.${table.dataset}.${table.table}` }
+        : { kind: 'other' as const };
+    });
+  }
+
+  private async openConnection(editor: LookerStudioEditor): Promise<void> {
+    await editor.page.getByRole('button', { name: DATA_SOURCE.editConnection }).first().click();
+    await editor.page
+      .getByRole('button', { name: 'Reconnect', exact: true })
+      .waitFor({ timeout: this.opts.stepTimeoutMs });
+    await editor.settle(1500);
+  }
+
+  // Edit Connection › CodeMirror › Reconnect, then Apply the field changes.
+  private async replaceSql(editor: LookerStudioEditor, sql: string): Promise<string[]> {
+    const page = editor.page;
+    return editor.step('replace the custom query', async () => {
+      await this.openConnection(editor);
+      const set = await page.evaluate(
+        ({ selector, value }) => {
+          const host = document.querySelector(selector) as
+            (Element & { CodeMirror?: { setValue(v: string): void } }) | null;
+          if (!host?.CodeMirror || host.getBoundingClientRect().width === 0) return false;
+          host.CodeMirror.setValue(value);
+          return true;
+        },
+        { selector: SEL.customQueryEditor, value: sql },
+      );
+      if (!set) {
+        await page.getByRole('button', { name: 'Cancel', exact: true }).first().click();
+        throw new Error('this data source is a table, not a custom query');
+      }
+      await editor.settle(800);
+      await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
+      const notes: string[] = [];
+      const changes = page.locator('mat-dialog-container', { hasText: 'Apply Connection Changes' });
+      const same = page.locator('mat-dialog-container', {
+        hasText: 'No connection changes were found',
+      });
+      const rejected = page.locator('mat-dialog-container, [role=dialog]', {
+        hasText: /Configuration Error|query returned an error/i,
+      });
+      const fields = page.getByRole('button', { name: 'REFRESH FIELDS' });
+      const outcome = await Promise.race([
+        changes.waitFor({ timeout: 60_000 }).then(() => 'changes' as const),
+        same.waitFor({ timeout: 60_000 }).then(() => 'same' as const),
+        rejected
+          .first()
+          .waitFor({ timeout: 60_000 })
+          .then(() => 'rejected' as const),
+        fields.waitFor({ timeout: 60_000 }).then(() => 'fields' as const),
+      ]).catch(() => 'timeout' as const);
+      if (outcome === 'rejected') {
+        // The dialog only says the query failed; BigQuery's dry run says why.
+        const why = (await rejected.first().innerText())
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l && !/^(ok|error id:.*)$/i.test(l));
+        throw new Error(
+          `the query was rejected (${why.join(' ')}); the data source keeps its old SQL. Dry-run the SQL with run_query to see the error`,
+        );
+      }
+      if (outcome === 'changes') {
+        notes.push(...parseConnectionChanges(await changes.innerText()));
+        await changes.getByRole('button', { name: 'Apply' }).click();
+      } else if (outcome === 'same') {
+        await same.getByRole('button', { name: 'Continue' }).click();
+      } else if (outcome === 'timeout') {
+        // A rejected query keeps the connection page open with the error on it.
+        const error = await page
+          .locator('.error, [class*=error], mat-error')
+          .filter({ visible: true })
+          .allInnerTexts()
+          .catch(() => []);
+        throw new Error(`the query was not accepted${error.length ? `: ${error.join(' ')}` : ''}`);
+      }
+      await fields.waitFor({ timeout: this.opts.stepTimeoutMs });
+      await editor.settle(1000);
+      return notes;
+    });
   }
 }
