@@ -74,3 +74,5 @@ npm test             # vitest watch
 - Blends: the merge dialog pre-fills key pairs with the same field name; the join type buttons need a forced click.
 - Page visibility (Control visibility) is a dialog of three radios and Confirm.
 - When a repository call fails, a screenshot of the editor is saved as `error-<report>-<time>.png` in the screenshots folder.
+- Connectors other than BigQuery ask to Authorize on first use: a Google OAuth popup (account chooser, then `#submit_approve_access`, its labels in the account language). Google Sheets: pick "Url" in the left list; options are `mat-checkbox[formcontrolname=…]`. PostgreSQL/MySQL inputs carry `formcontrolname` (hostNameOrIp, port, database, username, password).
+- The "Community visualizations and components" button is disabled until the report has a data source. Third-party visualizations ask "Grant consent" (Allow). They draw in an iframe that swallows a resize drag passing over it: turn off its pointer events while resizing.

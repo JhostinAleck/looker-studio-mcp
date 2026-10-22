@@ -18,7 +18,6 @@ import type {
   ThemeSpec,
 } from '@/contexts/reports/domain/ReportRepository.js';
 import {
-  type BigQuerySource,
   type ChartSpec,
   type ComponentDetails,
   type ComponentInfo,
@@ -38,6 +37,11 @@ import {
   validateLayout,
   validateSettings,
 } from '@/contexts/reports/domain/Report.js';
+import {
+  type CommunityVizSpec,
+  validateCommunityViz,
+} from '@/contexts/reports/domain/community.js';
+import { type DataSource, validateDataSource } from '@/contexts/reports/domain/connectors.js';
 import { DomainError } from '@/shared-kernel/errors/DomainError.js';
 
 export class ReportNameMismatchError extends DomainError {
@@ -65,9 +69,9 @@ export async function listReports(
 export async function createReport(
   repo: ReportRepository,
   name: string,
-  source: BigQuerySource,
+  source: DataSource,
 ): Promise<ReportSummary> {
-  return repo.createReport(name.trim(), source);
+  return repo.createReport(name.trim(), validateDataSource(source));
 }
 
 export async function refreshDataSources(
@@ -81,9 +85,9 @@ export async function refreshDataSources(
 export async function addDataSource(
   repo: ReportRepository,
   report: string,
-  source: BigQuerySource,
+  source: DataSource,
 ): Promise<void> {
-  return repo.addDataSource(parseReportId(report), source);
+  return repo.addDataSource(parseReportId(report), validateDataSource(source));
 }
 
 type StyledPlace = PlaceOptions & { style?: StyleSettings };
@@ -500,4 +504,15 @@ export async function deleteReport(
     throw new ReportNameMismatchError(found?.name ?? null, confirmName);
   }
   await repo.deleteReport(id);
+}
+
+// ── Community visualizations ──
+
+export async function addCommunityViz(
+  repo: ReportRepository,
+  report: string,
+  viz: CommunityVizSpec,
+  opts: ChartOptions = {},
+): Promise<ComponentInfo> {
+  return repo.addCommunityViz(parseReportId(report), validateCommunityViz(viz), checkPlace(opts));
 }

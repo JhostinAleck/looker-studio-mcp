@@ -1,5 +1,5 @@
 import { addDataSource } from '@/contexts/reports/application/reportUseCases.js';
-import { describeSource } from '@/contexts/reports/domain/Report.js';
+import { describeDataSource } from '@/contexts/reports/domain/connectors.js';
 import { addDataSourceSchema } from '@/mcp/schemas.js';
 import {
   resolveSource,
@@ -17,7 +17,7 @@ export async function handleAddDataSource(
 ): Promise<ToolResult> {
   const input = addDataSourceSchema.parse(raw);
   const source = resolveSource(deps.defaultProject, input);
-  const table = describeSource(source);
+  const table = describeDataSource(source);
   return runWrite(deps, 'add_data_source', { ...input }, `add ${table} to the report`, async () => {
     await addDataSource(deps.reportRepo, input.report_id, source);
     return text(`Data source \`${table}\` added to the report.`);

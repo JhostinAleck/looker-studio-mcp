@@ -69,6 +69,7 @@ function fakeRepo(): ReportRepository {
     shareReport: vi.fn(async () => undefined),
     screenshot: vi.fn(),
     deleteReport: vi.fn(async () => undefined),
+    addCommunityViz: vi.fn(async () => placed),
   };
 }
 
