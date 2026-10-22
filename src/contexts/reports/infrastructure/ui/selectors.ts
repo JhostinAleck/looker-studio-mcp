@@ -393,3 +393,36 @@ export const COMMUNITY_SEL = {
   consentTitle: 'Grant consent',
   panelTitle: /^Community visualization/,
 } as const;
+
+// ── Custom query parameters ──
+
+// Checkboxes under the SQL box of the BigQuery connector's CUSTOM QUERY tab.
+export const CUSTOM_QUERY_OPTIONS = {
+  dateRangeParams: 'Enable date range parameters',
+  viewerEmailParam: 'Enable viewer email address parameter',
+  // Dialog the viewer email option opens; its Allow button turns the option on.
+  consentDialog: 'Grant consent',
+} as const;
+
+// ── Report check ──
+
+// How a component shows its state. Charts and controls have a header (texts,
+// shapes and images do not); while loading they show a shimmer; instead of
+// data they show an error card ("Too Many Rows", "Invalid dimension", "User
+// Configuration Error"…) whose "See details" opens a dialog, or "No data".
+export const CHECK = {
+  dataHeader: '.lego-component-header',
+  loading: 'ng2-canvas-component-loading-shimmer',
+  error: 'ng2-component-error',
+  errorTitle: '.error-title',
+  errorDescription: '.error-description',
+  detailsLink: 'a.more',
+  noData: '.noData',
+  noDataText: 'No data',
+  chartTitle: 'chart-title',
+  // The "See details" dialog (AngularJS Material) repeats the card's title and
+  // description, then adds Looker's message, the query error in a code block
+  // and an error id.
+  errorDialog: 'md-dialog.errorDialog',
+  dialogParts: 'p.errorMessage, .error-code-block, .error-id p',
+} as const;

@@ -78,6 +78,15 @@ describe('tool helpers', () => {
     );
   });
 
+  it('passes the query parameter options only with sql', () => {
+    expect(
+      resolveSource('p', { sql: 'SELECT 1', date_range_params: true, viewer_email_param: false }),
+    ).toEqual({ projectId: 'p', sql: 'SELECT 1', dateRangeParams: true });
+    expect(() =>
+      resolveSource('p', { dataset_id: 'd', table_id: 't', viewer_email_param: true }),
+    ).toThrow(InvalidSourceError);
+  });
+
   it('shows the user message of domain errors', () => {
     const result = errorResult(new InvalidChartError('A chart needs at least one metric.'));
     expect(result).toEqual({

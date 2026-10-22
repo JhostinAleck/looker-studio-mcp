@@ -1,3 +1,5 @@
+import { DomainError } from '@/shared-kernel/errors/DomainError.js';
+
 import { isQuerySource, type BigQuerySource } from './Report.js';
 import {
   CONNECTOR_LABEL,
@@ -7,6 +9,14 @@ import {
   connectorOf,
   isSheetsSource,
 } from './connectors.js';
+
+// The Linking API documents no parameter for the connector's date range and
+// viewer email options, so a link cannot turn them on.
+export class LinkingQueryParametersError extends DomainError {
+  readonly code = 'LINKING_QUERY_PARAMETERS';
+  readonly userMessage =
+    'The Linking API cannot enable date range or viewer email parameters. Create the report with create_report or add the source with add_data_source instead.';
+}
 
 export interface LinkingRequest {
   reportName: string;
@@ -41,6 +51,7 @@ export function buildLinkingUrl(req: LinkingRequest): string {
     params.set(`${p}.connector`, 'bigQuery');
     params.set(`${p}.projectId`, bq.projectId);
     if (isQuerySource(bq)) {
+      if (bq.dateRangeParams || bq.viewerEmailParam) throw new LinkingQueryParametersError();
       params.set(`${p}.type`, 'CUSTOM_QUERY');
       params.set(`${p}.sql`, bq.sql);
     } else {

@@ -154,3 +154,5 @@ For a light report: theme `Simple`, background `#F6F7FB`, cards `#FFFFFF` with `
 ## Checking your work
 
 Call `screenshot_report` after each block. It renders the page in view mode with real data, so it shows what the audience will see: wrong fields, "Too many rows", clipped labels, overlaps.
+
+When the report is done, run `check_report`: it lists every chart that shows "No data", a configuration error or a data set error on any page, with the fields and Looker's details ([docs/check-report.md](check-report.md)).

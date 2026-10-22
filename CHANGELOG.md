@@ -4,6 +4,9 @@
 
 - New tool `add_community_viz`: community visualizations from the gallery by name or from a gs:// manifest, with the consent prompt accepted and data source, dimensions, metrics and Setup slots set like a chart.
 - `create_report`, `add_data_source` and `build_report_link` take `connector`: Google Sheets (spreadsheet URL or id, worksheet, header/hidden-cells options, range; Linking API by worksheet gid) and PostgreSQL/MySQL (host, port, database, user, password, SSL, table or custom query; not verified end to end). BigQuery stays the default; passwords are redacted from the audit log.
+- New tool `check_report`: lists the charts of every page (or one page) that show "No data", configuration errors, data set errors (Too Many Rows, BigQuery query errors with their message) or are still loading, with page, index, kind, fields and the "See details" text.
+- Custom queries take `date_range_params` (`@DS_START_DATE`, `@DS_END_DATE`) and `viewer_email_param` (`@DS_USER_EMAIL`); the viewer email consent is given for the signed-in account. `build_report_link` refuses them: the Linking API has no parameter for them.
+- `create_report`, `add_data_source` and `build_report_link` dry-run a custom query in BigQuery first and return BigQuery's error without opening the browser; only a single SELECT is accepted.
 - `create_report`, `add_data_source` and `build_report_link` take a custom query: `sql` instead of `dataset_id` and `table_id`, with `project_id` as the billing project. `source_name` names the data source; without it Looker Studio names it after the first table in the query.
 - Filters take several clauses (`clauses`: AND groups of OR clauses). Filter values are typed with the editor's suggestions off: with them on, a typed value that the editor could not suggest was dropped and the filter was saved empty.
 - `date_range` takes fixed dates (`2026-10-01..2026-10-15`).

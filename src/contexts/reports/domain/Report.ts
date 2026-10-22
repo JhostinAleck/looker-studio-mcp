@@ -18,6 +18,10 @@ export interface BigQueryQuerySource {
   projectId: string;
   sql: string;
   name?: string;
+  // Connector options that pass @DS_START_DATE / @DS_END_DATE (the report's
+  // date range) and @DS_USER_EMAIL (the viewer) to the query.
+  dateRangeParams?: boolean;
+  viewerEmailParam?: boolean;
 }
 
 export type BigQuerySource = BigQueryTableSource | BigQueryQuerySource;
@@ -31,6 +35,39 @@ export function describeSource(source: BigQuerySource): string {
   if (!isQuerySource(source)) return `${source.projectId}.${source.datasetId}.${source.tableId}`;
   const sql = source.sql.replace(/\s+/g, ' ').trim();
   return `custom query on ${source.projectId}: ${sql.length > 60 ? `${sql.slice(0, 57)}...` : sql}`;
+}
+
+// ── Custom query parameters ──
+
+export class QueryParameterError extends DomainError {
+  readonly code = 'QUERY_PARAMETER_OFF';
+  readonly userMessage: string;
+
+  constructor(parameter: string, option: string) {
+    super(`@${parameter} used without ${option}`);
+    this.userMessage = `The query uses @${parameter}, which Looker Studio only passes with ${option}: true.`;
+  }
+}
+
+const usesParameter = (sql: string, name: string) => new RegExp(`@${name}\\b`, 'i').test(sql);
+
+// Stand-ins for the values the connector passes (dates as YYYYMMDD strings),
+// used to dry-run the query. A parameter the SQL uses with its option off would
+// make every chart fail, so it is refused here.
+export function sampleQueryParameters(source: BigQueryQuerySource): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const [name, value] of [
+    ['DS_START_DATE', '20260101'],
+    ['DS_END_DATE', '20260131'],
+  ] as const) {
+    if (source.dateRangeParams) params[name] = value;
+    else if (usesParameter(source.sql, name))
+      throw new QueryParameterError(name, 'date_range_params');
+  }
+  if (source.viewerEmailParam) params.DS_USER_EMAIL = 'viewer@example.com';
+  else if (usesParameter(source.sql, 'DS_USER_EMAIL'))
+    throw new QueryParameterError('DS_USER_EMAIL', 'viewer_email_param');
+  return params;
 }
 
 export const CHART_TYPES = [
@@ -562,4 +599,48 @@ export function validateSettings(settings: StyleSettings): StyleSettings {
     }
   }
   return settings;
+}
+
+// ── Report check ──
+
+// What a chart shows instead of its data, sorted by who has to fix it.
+export type ChartProblemKind =
+  | 'no_data' // the query returned no rows (often a filter or date range)
+  | 'configuration' // the chart setup: invalid or missing fields
+  | 'data_set' // the data source or its query: BigQuery errors, too many rows
+  | 'consent' // the viewer has not allowed the viewer email parameter
+  | 'loading' // still loading when the check gave up
+  | 'error';
+
+export interface ChartProblem {
+  page: number;
+  pageName?: string;
+  // Component index on its page, as list_components gives it.
+  index: number;
+  kind: string;
+  title?: string;
+  fields?: string[];
+  problem: ChartProblemKind;
+  // The message on the chart, e.g. "Too Many Rows: Due to the number of rows…".
+  message: string;
+  // The "See details" dialog: Looker's explanation and, for queries, BigQuery's error.
+  details?: string;
+}
+
+export interface ReportCheck {
+  pages: Array<{ index: number; name?: string }>;
+  // Charts and controls looked at (texts, shapes and images have no data).
+  components: number;
+  problems: ChartProblem[];
+}
+
+// Sorts the title of a chart error into a problem kind.
+export function classifyChartError(title: string): ChartProblemKind {
+  const t = title.toLowerCase();
+  if (/no data/.test(t)) return 'no_data';
+  if (/consent/.test(t)) return 'consent';
+  if (/too many rows|data ?set|data source|system error|query|bigquery|user configuration/.test(t))
+    return 'data_set';
+  if (/invalid|configuration|missing|field|dimension|metric/.test(t)) return 'configuration';
+  return 'error';
 }

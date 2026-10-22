@@ -407,6 +407,18 @@ const sourceShape = {
     })
     .optional()
     .describe('postgresql/mysql: turns on "Enable SSL"; certificate files are optional'),
+  date_range_params: z
+    .boolean()
+    .optional()
+    .describe(
+      'Only with sql: enable date range parameters, so the query can use @DS_START_DATE and @DS_END_DATE (YYYYMMDD strings)',
+    ),
+  viewer_email_param: z
+    .boolean()
+    .optional()
+    .describe(
+      'Only with sql: enable the viewer email address parameter, so the query can use @DS_USER_EMAIL',
+    ),
 };
 
 export const createReportSchema = z.object({
@@ -814,4 +826,21 @@ export const addCommunityVizSchema = z.object({
   page,
   data_source: z.string().optional().describe('Data source name when the report has several'),
   ...dataShape,
+});
+
+export const checkReportSchema = z.object({
+  report_id: reportId,
+  page: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('1-based page to check; every page when omitted'),
+  timeout_seconds: z
+    .number()
+    .int()
+    .min(5)
+    .max(300)
+    .default(30)
+    .describe('How long to wait per page for charts to load before reporting them as loading'),
 });

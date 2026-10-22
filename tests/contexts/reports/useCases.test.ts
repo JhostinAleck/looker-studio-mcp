@@ -75,9 +75,7 @@ function fakeRepo(): ReportRepository {
 
 describe('report use cases', () => {
   it('filters reports by name, ignoring case', async () => {
-    expect((await listReports(fakeRepo(), 'sales')).map((r) => r.name)).toEqual([
-      'Sales - KPIs',
-    ]);
+    expect((await listReports(fakeRepo(), 'sales')).map((r) => r.name)).toEqual(['Sales - KPIs']);
   });
 
   it('validates the chart and parses the report URL before editing', async () => {

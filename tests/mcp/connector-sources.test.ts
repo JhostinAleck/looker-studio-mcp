@@ -154,9 +154,10 @@ describe('connector schemas and tools', () => {
     expect(JSON.stringify(out)).toContain('reader@db.example.com/shop table orders');
   });
 
-  it('builds a Sheets link from a URL with its gid', () => {
-    const out = handleBuildReportLink(
-      { defaultProject: undefined },
+  it('builds a Sheets link from a URL with its gid', async () => {
+    // Only custom queries reach BigQuery: a Sheets source never uses these.
+    const out = await handleBuildReportLink(
+      { defaultProject: undefined, bigQueryRepo: {} as never, queryLimits: {} as never },
       { report_name: 'R', sources: [{ connector: 'google_sheets', spreadsheet: URL_777 }] },
     );
     const link = /https:\/\/\S+/.exec(out.content[0]?.type === 'text' ? out.content[0].text : '')!;

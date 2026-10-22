@@ -9,7 +9,7 @@ import {
   validateControl,
 } from '@/contexts/reports/domain/Report.js';
 import { datePresetPath } from '@/contexts/reports/infrastructure/ui/selectors.js';
-import { buildLinkingUrl } from '@/contexts/reports/domain/linking.js';
+import { LinkingQueryParametersError, buildLinkingUrl } from '@/contexts/reports/domain/linking.js';
 
 const ID = '1a2b3c4d-0000-4000-8000-1234567890ab';
 
@@ -169,5 +169,14 @@ describe('buildLinkingUrl', () => {
     expect(url.searchParams.get('ds.*.projectId')).toBe('p-12345');
     expect(url.searchParams.get('ds.*.datasetId')).toBeNull();
     expect(url.searchParams.get('ds.*.datasourceName')).toBe('Q1');
+  });
+
+  it('refuses query parameters, which the Linking API cannot enable', () => {
+    expect(() =>
+      buildLinkingUrl({
+        reportName: 'Q',
+        sources: [{ projectId: 'p-12345', sql: 'SELECT 1', dateRangeParams: true }],
+      }),
+    ).toThrow(LinkingQueryParametersError);
   });
 });

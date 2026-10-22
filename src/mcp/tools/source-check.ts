@@ -1,0 +1,23 @@
+import { checkSourceQuery } from '@/contexts/bigquery/application/bigqueryUseCases.js';
+import { isBigQuerySource, type DataSource } from '@/contexts/reports/domain/connectors.js';
+import { isQuerySource, sampleQueryParameters } from '@/contexts/reports/domain/Report.js';
+
+import type { BigQueryToolDeps } from './bigquery-deps.js';
+
+export type SourceCheckDeps = Pick<BigQueryToolDeps, 'bigQueryRepo' | 'queryLimits'>;
+
+// A custom query is dry-run in BigQuery before Looker Studio sees it: the
+// connector only shows a failing query as a dialog error the editor cannot read.
+export async function checkQuerySource(deps: SourceCheckDeps, source: DataSource): Promise<void> {
+  if (!isBigQuerySource(source) || !isQuerySource(source)) return;
+  const parameters = sampleQueryParameters(source);
+  await checkSourceQuery(
+    deps.bigQueryRepo,
+    {
+      projectId: source.projectId,
+      sql: source.sql,
+      ...(Object.keys(parameters).length > 0 ? { parameters } : {}),
+    },
+    deps.queryLimits,
+  );
+}

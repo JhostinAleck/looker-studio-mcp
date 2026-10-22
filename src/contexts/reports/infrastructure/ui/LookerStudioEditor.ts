@@ -1,6 +1,7 @@
 import type { Locator, Page } from 'playwright';
 
 import type {
+  BigQueryQuerySource,
   BigQuerySource,
   ButtonSpec,
   ConditionalFormat,
@@ -35,8 +36,10 @@ import { InfrastructureError } from '@/shared-kernel/errors/InfrastructureError.
 
 import {
   BASE,
+  CHECK,
   COMMUNITY_SEL,
   CONNECTOR_SEL,
+  CUSTOM_QUERY_OPTIONS,
   DB_CERTIFICATE_HINT,
   DB_CLIENT_AUTH_LABEL,
   DB_SSL_LABEL,
@@ -72,6 +75,19 @@ export interface CanvasGeometry {
 
 // One row of the Setup panel: a chip with a field, or an "Add …" drop target,
 // under the section label it belongs to ("Dimension", "Metric", "Sort"…).
+// What a component of the canvas shows, read by check_report.
+export interface ComponentState {
+  index: number;
+  // Charts and controls; texts, shapes and images have no data.
+  data: boolean;
+  loading: boolean;
+  noData: boolean;
+  error?: { title: string; description: string; hasDetails: boolean };
+  title?: string;
+  // Header class of the chart, e.g. "simple-barchart": a kind when nothing better is known.
+  type?: string;
+}
+
 interface SetupSlot {
   section: string;
   kind: 'chip' | 'add';
@@ -516,6 +532,7 @@ export class LookerStudioEditor {
         .click({ timeout: this.timeoutMs });
       if (isQuerySource(source)) {
         await this.fillCustomQuery(source.projectId, source.sql);
+        await this.setCustomQueryOptions(source);
       } else {
         await this.pickTable(source.projectId, source.datasetId, source.tableId);
       }
@@ -527,6 +544,7 @@ export class LookerStudioEditor {
         .locator(SEL.dataPanelChip('Record Count'))
         .first()
         .waitFor({ timeout: this.timeoutMs });
+      if (isQuerySource(source) && source.viewerEmailParam) await this.acceptReportConsent();
     });
     await this.settle();
   }
@@ -561,6 +579,59 @@ export class LookerStudioEditor {
     await editor.evaluate((e, text) => {
       (e as HTMLElement & { CodeMirror: { setValue(v: string): void } }).CodeMirror.setValue(text);
     }, sql);
+  }
+
+  // ── Custom query parameters ──
+
+  // Ticks "Enable date range parameters" / "Enable viewer email address
+  // parameter" under the SQL box; the connector then passes @DS_START_DATE,
+  // @DS_END_DATE and @DS_USER_EMAIL to the query.
+  private async setCustomQueryOptions(source: BigQueryQuerySource): Promise<void> {
+    for (const key of ['dateRangeParams', 'viewerEmailParam'] as const) {
+      if (!source[key]) continue;
+      const box = this.page
+        .locator('mat-checkbox')
+        .filter({ hasText: CUSTOM_QUERY_OPTIONS[key] })
+        .first();
+      await box.waitFor({ timeout: this.timeoutMs });
+      const input = box.locator('input[type=checkbox]');
+      if (!(await input.isChecked())) {
+        await box.locator('label').click();
+        // The viewer email asks the signed-in account for consent first.
+        const consent = this.page.locator('mat-dialog-container', {
+          hasText: CUSTOM_QUERY_OPTIONS.consentDialog,
+        });
+        if (
+          await consent.waitFor({ timeout: 3_000 }).then(
+            () => true,
+            () => false,
+          )
+        ) {
+          await consent.getByRole('button', { name: 'Allow', exact: true }).click();
+          await consent.waitFor({ state: 'hidden', timeout: this.timeoutMs });
+        }
+      }
+      if (!(await input.isChecked()))
+        throw new Error(`"${CUSTOM_QUERY_OPTIONS[key]}" did not turn on`);
+    }
+  }
+
+  // A report with a viewer email source asks each viewer once for consent
+  // before its charts load; the account that adds the source gives it here so
+  // the editor is not blocked on the next visits.
+  private async acceptReportConsent(): Promise<void> {
+    const consent = this.page.locator('mat-dialog-container', {
+      hasText: CUSTOM_QUERY_OPTIONS.consentDialog,
+    });
+    if (
+      !(await consent.waitFor({ timeout: 15_000 }).then(
+        () => true,
+        () => false,
+      ))
+    )
+      return;
+    await consent.getByRole('button', { name: 'Allow', exact: true }).click();
+    await consent.waitFor({ state: 'hidden', timeout: this.timeoutMs });
   }
 
   // Picks the data source in the Setup panel when the report has several: the
@@ -2001,5 +2072,96 @@ export class LookerStudioEditor {
     await this.page.mouse.click(point.x, point.y);
     await sleep(1000);
     return true;
+  }
+
+  // ── Report check ──
+
+  async componentStates(): Promise<ComponentState[]> {
+    return this.page.locator(`${SEL.canvas} ${SEL.component}`).evaluateAll((nodes, c) => {
+      const visible = (e: Element | null) => {
+        const r = e?.getBoundingClientRect();
+        return !!r && r.width > 0 && r.height > 0;
+      };
+      return nodes.map((node, index) => {
+        const header = node.querySelector(c.dataHeader);
+        const error = node.querySelector(c.error);
+        const title = node.querySelector(c.chartTitle)?.textContent?.trim();
+        const type = header?.className
+          .toString()
+          .split(/\s+/)
+          .find((k) => k && !k.startsWith('lego-'));
+        // Tables keep a hidden "No data" row; other charts write it as text.
+        const noData =
+          [...node.querySelectorAll(c.noData)].some(visible) ||
+          [...node.querySelectorAll('*')].some(
+            (e) => e.children.length === 0 && e.textContent?.trim() === c.noDataText && visible(e),
+          );
+        return {
+          index,
+          data: !!header,
+          loading: [...node.querySelectorAll(c.loading)].some(visible),
+          noData,
+          ...(error && visible(error)
+            ? {
+                error: {
+                  title: error.querySelector(c.errorTitle)?.textContent?.trim() ?? '',
+                  description: error.querySelector(c.errorDescription)?.textContent?.trim() ?? '',
+                  hasDetails: !!error.querySelector(c.detailsLink),
+                },
+              }
+            : {}),
+          ...(title ? { title } : {}),
+          ...(type ? { type } : {}),
+        };
+      });
+    }, CHECK);
+  }
+
+  // Polls until no chart shows its loading shimmer, or the time is up.
+  async waitForCharts(timeoutMs: number): Promise<ComponentState[]> {
+    const deadline = Date.now() + timeoutMs;
+    // Charts start loading a moment after the canvas is drawn.
+    await sleep(1500);
+    for (;;) {
+      const states = await this.componentStates();
+      if (!states.some((s) => s.loading) || Date.now() > deadline) return states;
+      await sleep(500);
+    }
+  }
+
+  // Opens the "See details" dialog of a chart error and returns its text
+  // (Looker's message, the BigQuery error, the error id), then closes it.
+  async errorDetails(index: number): Promise<string | undefined> {
+    const link = this.component(index).locator(`${CHECK.error} ${CHECK.detailsLink}`).first();
+    if (!(await link.count())) return undefined;
+    await link.click();
+    const dialog = this.page.locator(CHECK.errorDialog).last();
+    if (
+      !(await dialog.waitFor({ timeout: 5_000 }).then(
+        () => true,
+        () => false,
+      ))
+    )
+      return undefined;
+    const parts = await dialog
+      .locator(CHECK.dialogParts)
+      .evaluateAll((nodes) =>
+        nodes.map((n) => (n.textContent ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean),
+      );
+    await dialog
+      .getByRole('button', { name: /^ok$/i })
+      .click()
+      .catch(() => this.page.keyboard.press('Escape'));
+    await dialog.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => undefined);
+    return [...new Set(parts)].join(' / ') || undefined;
+  }
+
+  // Fields in the Setup slots of the selected component, as "Slot: field".
+  async setupFields(): Promise<string[]> {
+    await this.openTab('Setup');
+    const slots = await this.setupSlots();
+    return slots
+      .filter((s) => s.kind === 'chip' && s.field)
+      .map((s) => (s.section ? `${s.section}: ${s.field}` : s.field!));
   }
 }

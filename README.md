@@ -99,6 +99,7 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `describe_component` | Every Setup/Style setting of a component with its exact label and value |
 | `screenshot_report` | PNG of a page in view mode, returned as an image |
 | `build_report_link` | A Linking API URL that creates a report from BigQuery tables, custom queries or Google Sheets |
+| `check_report` | Every chart of a report (or a page) that shows "No data", a configuration error, a data set error (Too Many Rows, BigQuery errors) or is still loading, with page, index, kind, fields and Looker's details ([docs](docs/check-report.md)) |
 
 ### Write tools (require writes)
 
@@ -133,7 +134,7 @@ Settings are addressed by the **label the properties panel shows** (`"Bar color"
 
 ## Custom queries
 
-`create_report`, `add_data_source` and `build_report_link` take `sql` instead of `dataset_id` and `table_id`; `project_id` is then the billing project and `source_name` names the data source. The data source then works like any other. See [docs/custom-queries.md](docs/custom-queries.md) for naming, field types, validation and cost.
+`create_report`, `add_data_source` and `build_report_link` take `sql` instead of `dataset_id` and `table_id`; `project_id` is then the billing project and `source_name` names the data source. The SQL is dry-run in BigQuery first: a query BigQuery rejects comes back with BigQuery's message and the browser never opens. `date_range_params` and `viewer_email_param` pass `@DS_START_DATE`/`@DS_END_DATE` and `@DS_USER_EMAIL` to the query (not through the Linking API). The data source then works like any other. See [docs/custom-queries.md](docs/custom-queries.md) for naming, field types, validation and cost.
 
 ## Other connectors
 
@@ -172,8 +173,10 @@ See [docs/design-guide.md](docs/design-guide.md) for the canvas grid, the card p
 - `add_page` appends after the last page.
 - `manage_filter` edit rewrites every clause of the filter; charts that use it keep it.
 - Filter values are typed as free text (the editor's value suggestions are turned off), so a value that is not in the data is accepted: check the spelling. "In" takes its values comma separated.
-- Custom queries: always pass `source_name`, cast columns whose type Looker Studio may guess wrong, and dry-run the SQL first ([details](docs/custom-queries.md)).
+- Custom queries: always pass `source_name` and cast columns whose type Looker Studio may guess wrong. The automatic dry run catches unknown columns and syntax errors, not errors that only happen when the query runs ([details](docs/custom-queries.md)).
 - PostgreSQL and MySQL were written against the live connector form, but not run end to end against a database: the table list and custom query step after AUTHENTICATE are untested ([details](docs/connectors.md)).
+- `build_report_link` cannot enable date range or viewer email parameters: the Linking API has no parameter for them.
+- `check_report` opens the editor, so it needs edit access, and reads the English messages of Looker Studio.
 - Community visualizations define their own Setup slots and Style settings: use `describe_component` to read them. `add_community_viz` accepts the gallery's consent prompt for you.
 - `share_report` opens a visible Chrome window for a few seconds: Google refuses invitations sent from a headless browser. It sends one invitation per address, since a batch fails with "An unknown error occurred".
 

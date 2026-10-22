@@ -1,6 +1,7 @@
 import type { CommunityVizSpec } from './community.js';
 import type { DataSource } from './connectors.js';
 import type {
+  ReportCheck,
   ButtonSpec,
   ChartSpec,
   ChartType,
@@ -303,4 +304,8 @@ export interface ReportRepository {
     viz: CommunityVizSpec,
     opts: PlaceOptions & { dataSource?: string; style?: StyleSettings },
   ): Promise<ComponentInfo>;
+  // ── Report check ──
+  // Waits up to `timeoutMs` per page for the charts to load and reports what
+  // each one shows instead of data. Every page unless `page` is given.
+  checkReport(reportId: string, opts: { page?: number; timeoutMs: number }): Promise<ReportCheck>;
 }
