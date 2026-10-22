@@ -90,6 +90,9 @@ function fakeRepo(): ReportRepository {
       aggregation: 'Sum',
       kind: 'dimension' as const,
     })),
+    inOneVisit: vi.fn(async (_id: string, work: () => Promise<unknown>) => work()) as never,
+    dataSourceNames: vi.fn(async () => []),
+    readReport: vi.fn(),
   };
 }
 

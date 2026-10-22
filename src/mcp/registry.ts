@@ -52,6 +52,10 @@ import { handleListDataSources } from './tools/list-data-sources.tool.js';
 import { handleRemoveDataSource } from './tools/remove-data-source.tool.js';
 import { handleUpdateDataSource } from './tools/update-data-source.tool.js';
 import { handleUpdateField } from './tools/update-field.tool.js';
+import { handleApplyActions } from './tools/apply-actions.tool.js';
+import { BATCHABLE_TOOLS } from './tools/batch-actions.js';
+import { handleExportReportSpec } from './tools/export-report-spec.tool.js';
+import { handleApplyReportSpec } from './tools/apply-report-spec.tool.js';
 
 export interface ToolDeps extends BigQueryToolDeps, ReportToolDeps, CheckAuthDeps, WriteDeps {}
 
@@ -476,6 +480,35 @@ const TOOLS: ToolDef[] = [
     schema: schemas.updateFieldSchema,
     write: true,
     run: handleUpdateField,
+  },
+  {
+    name: 'apply_actions',
+    title: 'Run several edits in one visit',
+    description:
+      'Run a list of editing actions on one report in a single editor visit, much faster than one tool call each: actions [{tool:"add_chart", args:{…same args as add_chart, without report_id}}, …]. ' +
+      `Takes ${Object.keys(BATCHABLE_TOOLS).join(', ')}.\n` +
+      "Every action is validated before the browser opens. It stops at the first error unless continue_on_error; the reply has each action's result.",
+    schema: schemas.applyActionsSchema,
+    write: true,
+    run: handleApplyActions,
+  },
+  {
+    name: 'export_report_spec',
+    title: 'Export a report spec',
+    description:
+      'Read a report into a JSON spec: name, theme, data sources (table or SQL), pages and, per page, every component with its kind, layout, chart type, fields, title and main style settings. apply_report_spec rebuilds it. Takes a while: it opens each component.',
+    schema: schemas.exportReportSpecSchema,
+    write: false,
+    run: handleExportReportSpec,
+  },
+  {
+    name: 'apply_report_spec',
+    title: 'Build a report from a spec',
+    description:
+      'Create a report from a spec (as export_report_spec returns it, or written by hand: see docs/report-spec.md), or with report_id add what an existing report lacks: data sources, pages (by name) and components (by position). Nothing existing is changed or removed. Runs in one editor visit.',
+    schema: schemas.applyReportSpecSchema,
+    write: true,
+    run: handleApplyReportSpec,
   },
 ];
 

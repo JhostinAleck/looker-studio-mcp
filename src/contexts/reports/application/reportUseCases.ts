@@ -12,6 +12,8 @@ import type {
   PlaceOptions,
   ReportPage,
   ReportRepository,
+  ReportSnapshot,
+  StyleDepth,
   ScopeSettings,
   ShapeSpec,
   TextSpec,
@@ -589,4 +591,30 @@ export async function updateField(
 ): Promise<DataSourceField> {
   const checked = validateFieldChange(field, change);
   return repo.updateField(parseReportId(report), ref?.trim() || undefined, field.trim(), checked);
+}
+
+// ── Batch ──
+
+// Runs `work` in one editor visit of the report; `work` gets the parsed id.
+export async function inOneVisit<T>(
+  repo: ReportRepository,
+  report: string,
+  work: (reportId: string) => Promise<T>,
+): Promise<T> {
+  const id = parseReportId(report);
+  return repo.inOneVisit(id, () => work(id));
+}
+
+// ── Report specs ──
+
+export async function readReport(
+  repo: ReportRepository,
+  report: string,
+  style: StyleDepth = 'main',
+): Promise<ReportSnapshot> {
+  return repo.readReport(parseReportId(report), style);
+}
+
+export async function dataSourceNames(repo: ReportRepository, report: string): Promise<string[]> {
+  return repo.dataSourceNames(parseReportId(report));
 }

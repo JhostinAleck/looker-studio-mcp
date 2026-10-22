@@ -101,6 +101,7 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `build_report_link` | A Linking API URL that creates a report from BigQuery tables, custom queries or Google Sheets |
 | `check_report` | Every chart of a report (or a page) that shows "No data", a configuration error, a data set error (Too Many Rows, BigQuery errors) or is still loading, with page, index, kind, fields and Looker's details ([docs](docs/check-report.md)) |
 | `list_data_sources` | Data sources of a report: name, alias (ds0…), table or custom query SQL, charts using it, data credentials, data freshness; `fields: true` adds each field's type and aggregation |
+| `export_report_spec` | Read a report into a JSON spec (theme, data sources, pages, components with fields and main style) that `apply_report_spec` rebuilds |
 
 ### Write tools (require writes)
 
@@ -133,6 +134,8 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `remove_data_source` | Remove a data source by name or alias; refuses while charts use it unless `force: true` |
 | `update_data_source` | Rename a data source, replace a custom query's SQL, set data credentials (`owner`/`viewer`) and data freshness (`15 minutes` to `12 hours`) |
 | `update_field` | Change a data source field's type (Number, Text, Date…), default aggregation and/or name |
+| `apply_actions` | Run a list of editing actions (any of the tools above, same arguments) in one editor visit: validated first, a result per action |
+| `apply_report_spec` | Build a report from a JSON spec, or add the missing pages and components to an existing one, in one visit |
 
 Settings are addressed by the **label the properties panel shows** (`"Bar color"`, `"Show data labels"`, `"Border radius"`…). `describe_component` lists them; settings that do not exist come back as warnings instead of failing silently.
 
@@ -148,6 +151,10 @@ Settings are addressed by the **label the properties panel shows** (`"Bar color"
 - `postgresql`, `mysql`: `host`, `port`, `database`, `user`, `password`, `ssl`, and `table_id` or `sql`. Not available in `build_report_link` (the Linking API has no such connector).
 
 Passwords are redacted from the audit log and never appear in replies. See [docs/connectors.md](docs/connectors.md).
+
+## Batches and report specs
+
+Each editing tool opens the report, does its work and closes it. `apply_actions` runs many of them in one editor visit, several times faster: `{"report_id": "…", "actions": [{"tool": "add_text", "args": {"text": "Title"}}, …]}`. `export_report_spec` and `apply_report_spec` read a report into JSON and build one from it (copies, templates, dashboards written by hand). See [docs/report-spec.md](docs/report-spec.md).
 
 ## Designing dashboards
 

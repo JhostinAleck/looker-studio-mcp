@@ -904,3 +904,99 @@ export const updateFieldSchema = z.object({
   aggregation: z.enum(FIELD_AGGREGATIONS).optional().describe('Default aggregation'),
   name: z.string().min(1).optional().describe('New field name'),
 });
+
+// ── Batch ──
+
+export const applyActionsSchema = z.object({
+  report_id: reportId,
+  actions: z
+    .array(
+      z.object({
+        tool: z
+          .string()
+          .min(1)
+          .describe('An editing tool: add_chart, add_text, update_component, add_page, …'),
+        args: z
+          .record(z.string(), z.unknown())
+          .default({})
+          .describe("That tool's arguments, without report_id"),
+      }),
+    )
+    .min(1)
+    .max(200)
+    .describe('Run in order; pages are reached with the page argument of each action'),
+  continue_on_error: z
+    .boolean()
+    .default(false)
+    .describe('Run the remaining actions after one fails (it stops at the first error otherwise)'),
+});
+
+// ── Report specs ──
+
+// A component of a spec page: the arguments of the tool that adds it, without
+// report_id and page, tagged with `component`.
+const specArgs = { report_id: true, page: true } as const;
+export const specComponentSchema = z.discriminatedUnion('component', [
+  addChartSchema.omit(specArgs).extend({ component: z.literal('chart') }),
+  addTextSchema.omit(specArgs).extend({ component: z.literal('text') }),
+  addShapeSchema.omit(specArgs).extend({ component: z.literal('shape') }),
+  addControlSchema.omit(specArgs).extend({ component: z.literal('control') }),
+  addImageSchema.omit(specArgs).extend({ component: z.literal('image') }),
+  addLineSchema.omit(specArgs).extend({ component: z.literal('line') }),
+  addEmbedSchema.omit(specArgs).extend({ component: z.literal('embed') }),
+  z
+    .object({ component: z.literal('other'), panel: z.string(), layout: layout.optional() })
+    .describe('A component the spec cannot rebuild (kept for reference, skipped when applied)'),
+]);
+
+export const specDataSourceSchema = z.object({
+  name: z.string().min(1).optional().describe('Data source name in the report'),
+  project_id: z.string().min(1).describe('Project of the table, or billing project of sql'),
+  dataset_id: z.string().optional(),
+  table_id: z.string().optional(),
+  sql: z.string().min(1).optional().describe('Custom query instead of dataset_id and table_id'),
+});
+
+export const reportSpecSchema = z.object({
+  version: z.literal(1).default(1),
+  name: z.string().min(1).describe('Report name'),
+  theme: setThemeSchema
+    .omit({ report_id: true })
+    .optional()
+    .describe('set_theme arguments: preset, settings, canvas, layout'),
+  data_sources: z
+    .array(specDataSourceSchema)
+    .default([])
+    .describe('The first one creates the report; the others are added'),
+  calculated_fields: z.array(addCalculatedFieldSchema.omit({ report_id: true })).optional(),
+  pages: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        components: z
+          .array(specComponentSchema)
+          .default([])
+          .describe('Back to front, as list_components lists them'),
+      }),
+    )
+    .min(1),
+});
+
+export const exportReportSpecSchema = z.object({
+  report_id: reportId,
+  style: z
+    .enum(['none', 'main', 'all'])
+    .default('main')
+    .describe(
+      'Style settings kept per component: none, main (background, border, legend, data labels) or all',
+    ),
+});
+
+export const applyReportSpecSchema = z.object({
+  spec: reportSpecSchema.describe('A report spec, as export_report_spec returns it'),
+  report_id: reportId
+    .optional()
+    .describe('Update this report (add missing pages and components) instead of creating one'),
+  name: z.string().min(1).optional().describe('Name of the new report; defaults to spec.name'),
+  continue_on_error: z.boolean().default(false),
+});
