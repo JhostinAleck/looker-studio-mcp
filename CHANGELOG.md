@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reports with viewer's-credentials data sources no longer block every tool behind "Grant consent": each editor visit declines it whenever it appears (late, or again after a reload) instead of granting it; `check_report` and `screenshot_report` say which charts need the viewer's consent.
 - `update_data_source` dry-runs a new `sql` in `project_id` (or the config's project) before opening the editor; `copy_report` dry-runs custom query replacements and refuses non-BigQuery ones.
 - New tool `add_community_viz`: community visualizations from the gallery by name or from a gs:// manifest, with the consent prompt accepted and data source, dimensions, metrics and Setup slots set like a chart.
 - `create_report`, `add_data_source` and `build_report_link` take `connector`: Google Sheets (spreadsheet URL or id, worksheet, header/hidden-cells options, range; Linking API by worksheet gid) and PostgreSQL/MySQL (host, port, database, user, password, SSL, table or custom query; not verified end to end). BigQuery stays the default; passwords are redacted from the audit log.

@@ -11,12 +11,12 @@ export async function handleScreenshotReport(
   raw: unknown,
 ): Promise<ToolResult> {
   const input = screenshotReportSchema.parse(raw);
-  const path = await screenshotReport(deps.reportRepo, input.report_id, input.page);
+  const { path, notes } = await screenshotReport(deps.reportRepo, input.report_id, input.page);
   const data = (await readFile(path)).toString('base64');
   return {
     content: [
       { type: 'image', data, mimeType: 'image/png' },
-      { type: 'text', text: `Saved at ${path}` },
+      { type: 'text', text: [`Saved at ${path}`, ...notes].join('\n') },
     ],
   };
 }
