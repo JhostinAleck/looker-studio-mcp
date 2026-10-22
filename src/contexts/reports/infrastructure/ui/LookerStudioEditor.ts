@@ -45,6 +45,7 @@ import {
   DB_SSL_LABEL,
   HL,
   PRESET_ORDER,
+  REPORT_CONSENT,
   SECTION,
   SEL,
   SHEETS_URL_OPTION,
@@ -99,6 +100,13 @@ interface SetupSlot {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Per tab, not per editor: a batch reopens the report in the same tab.
+interface ConsentState {
+  grant: boolean;
+  declined: number;
+}
+const consentByTab = new WeakMap<Page, ConsentState>();
+
 function parseLayout(style: string): Layout {
   const read = (prop: string): number => {
     const match = new RegExp(`(?:^|;)\\s*${prop}:\\s*(-?[\\d.]+)px`).exec(style);
@@ -123,9 +131,61 @@ export class LookerStudioEditor {
     timeoutMs: number,
   ): Promise<LookerStudioEditor> {
     const editor = new LookerStudioEditor(page, timeoutMs);
+    await editor.watchConsent();
     await page.goto(`${BASE}/reporting/${reportId}/edit?${HL}`, { waitUntil: 'domcontentloaded' });
     await editor.waitForEditor();
     return editor;
+  }
+
+  // Viewer's credentials make Looker Studio ask the signed-in account, over the
+  // whole editor, to let the report read data as itself. It comes whenever a
+  // chart on such a source loads without consent: late, and again after a
+  // reload. Granting it is each viewer's own choice, so it is declined (those
+  // charts then show "Consent required"), except while a viewer email source
+  // is being added, whose flow grants it. Locator actions meet it through
+  // Playwright's handler; mouse work through the check in settle() and select().
+  private async watchConsent(): Promise<void> {
+    if (consentByTab.has(this.page)) return;
+    consentByTab.set(this.page, { grant: false, declined: 0 });
+    await this.page.addLocatorHandler(this.consentDialog(), () => this.answerConsent().then(), {
+      noWaitAfter: true,
+    });
+  }
+
+  private consentDialog(): Locator {
+    return this.page
+      .locator(REPORT_CONSENT.dialog)
+      .filter({ hasText: REPORT_CONSENT.text })
+      .first();
+  }
+
+  // Answers the dialog if it is open now; true when it was.
+  private async answerConsent(): Promise<boolean> {
+    const state = consentByTab.get(this.page);
+    const dialog = this.consentDialog();
+    if (!state || !(await dialog.isVisible().catch(() => false))) return false;
+    const button = state.grant ? REPORT_CONSENT.allow : REPORT_CONSENT.decline;
+    await dialog.getByRole('button', { name: button, exact: true }).click({ timeout: 5_000 });
+    await dialog.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => undefined);
+    if (!state.grant) state.declined++;
+    return true;
+  }
+
+  // Waits up to `timeoutMs` for the dialog and declines it; true when it came.
+  async declineConsent(timeoutMs: number): Promise<boolean> {
+    if (!consentByTab.has(this.page)) await this.watchConsent();
+    const shown = await this.consentDialog()
+      .waitFor({ timeout: timeoutMs })
+      .then(
+        () => true,
+        () => false,
+      );
+    return shown && (await this.answerConsent());
+  }
+
+  // How many times this tab declined the consent dialog.
+  get consentDeclines(): number {
+    return consentByTab.get(this.page)?.declined ?? 0;
   }
 
   static async openNew(page: Page, timeoutMs: number): Promise<LookerStudioEditor> {
@@ -156,6 +216,7 @@ export class LookerStudioEditor {
     if (this.network) await this.networkQuiet(5_000);
     else await this.page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
     await sleep(ms);
+    if (consentByTab.has(this.page)) await this.answerConsent().catch(() => false);
   }
 
   async step<T>(what: string, work: () => Promise<T>): Promise<T> {
@@ -323,6 +384,7 @@ export class LookerStudioEditor {
     if (index < 0 || index >= count) {
       throw new EditorStepError(`there is no component ${index} on this page (it has ${count}).`);
     }
+    await this.answerConsent().catch(() => false);
     await this.page.keyboard.press('Escape');
     await this.closeBackdrop();
     // Vega charts, community visualizations and URL embeds draw in an iframe
@@ -561,6 +623,17 @@ export class LookerStudioEditor {
 
   // Fills the BigQuery connector dialog that "Add data" (or a new report) opens.
   async connectBigQuery(source: BigQuerySource): Promise<void> {
+    const state = consentByTab.get(this.page);
+    const grant = isQuerySource(source) && !!source.viewerEmailParam;
+    if (state && grant) state.grant = true;
+    try {
+      await this.connectBigQuerySource(source);
+    } finally {
+      if (state && grant) state.grant = false;
+    }
+  }
+
+  private async connectBigQuerySource(source: BigQuerySource): Promise<void> {
     await this.step(`connect BigQuery ${describeSource(source)}`, async () => {
       await this.page
         .getByText('BigQuery', { exact: true })
@@ -965,10 +1038,36 @@ export class LookerStudioEditor {
       const custom = await find('custom');
       if (custom) {
         await this.page.mouse.click(custom.x, custom.y);
+        // Custom's tooltip opens to its right while hovered, over the picker
+        // that is then scrolled to the same line, and swallows its click.
+        await this.page.mouse.move(0, 0);
         await sleep(700);
       }
       const picker = await find('picker');
-      if (!picker) throw new Error('the Setup tab has no date range picker');
+      if (!picker) {
+        const section = await this.page
+          .locator(SEL.propertiesPanel)
+          .first()
+          .getByText(/^\s*Default date range/)
+          .count();
+        // Page and report settings only offer a default date range once they
+        // have a date range dimension; a custom query that takes the dates as
+        // parameters has no date field to be one.
+        throw new Error(
+          section
+            ? 'the Setup tab has no date range picker'
+            : 'there is no "Default date range" here: page and report settings need a date range dimension first (date_range_dimension, a date field of one of the data sources; a custom query with date range parameters has none, but it still follows the page or report range)',
+        );
+      }
+      await this.page
+        .waitForFunction(
+          ({ x, y }) => !!document.elementFromPoint(x, y)?.closest('button.ng2-date-picker-button'),
+          picker,
+          { timeout: 3000 },
+        )
+        .catch(() => {
+          throw new Error('something covers the date range picker');
+        });
       await this.page.mouse.click(picker.x, picker.y);
       await this.pickInDatePopup(path, fixed ? [fixed[1]!, fixed[2]!] : undefined);
     });
@@ -2159,6 +2258,7 @@ export class LookerStudioEditor {
     // Charts start loading a moment after the canvas is drawn.
     await sleep(1500);
     for (;;) {
+      await this.answerConsent().catch(() => false);
       const states = await this.componentStates();
       if (!states.some((s) => s.loading) || Date.now() > deadline) return states;
       await sleep(500);

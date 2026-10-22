@@ -1966,7 +1966,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     }
   }
 
-  async screenshot(reportId: string, page?: number): Promise<string> {
+  async screenshot(reportId: string, page?: number): Promise<{ path: string; notes: string[] }> {
     return this.opts.browser.withPage(async (tab) => {
       const editor = await LookerStudioEditor.openReport(tab, reportId, this.opts.stepTimeoutMs);
       await this.goToPage(editor, page);
@@ -1978,12 +1978,18 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       await tab.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => undefined);
       // Charts render after their queries return.
       await tab.waitForTimeout(3000);
+      await editor.declineConsent(2_000);
+      const notes = editor.consentDeclines
+        ? [
+            'Some charts read a data source with viewer\'s credentials: they show "Allow" instead of data until each viewer grants consent in Looker Studio. The consent dialog was declined, not granted on your behalf.',
+          ]
+        : [];
       mkdirSync(this.opts.screenshotsDir, { recursive: true });
       const file = join(this.opts.screenshotsDir, `${reportId}-p${page ?? 1}-${Date.now()}.png`);
       const canvas = tab.locator(SEL.canvas).first();
       if (!(await canvas.count())) {
         await tab.screenshot({ path: file, fullPage: true });
-        return file;
+        return { path: file, notes };
       }
       // The viewer scrolls inside its own container, so a page taller than the
       // window gets clipped: grow the window to fit the whole page first.
@@ -1993,7 +1999,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       } finally {
         await restore();
       }
-      return file;
+      return { path: file, notes };
     });
   }
 
@@ -2267,6 +2273,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       if (change.credentials) {
         const label = CREDENTIALS_LABEL[change.credentials];
         await editor.step(`set the data credentials to ${label}`, async () => {
+          const declines = editor.consentDeclines;
           await page.getByRole('button', { name: DATA_SOURCE.credentialsButton }).click();
           const dialog = page.locator('mat-dialog-container', {
             hasText: 'Update data credentials',
@@ -2276,7 +2283,8 @@ export class LookerStudioUiReportRepository implements ReportRepository {
           await dialog.getByRole('button', { name: /^update$/i }).click();
           await dialog.waitFor({ state: 'detached', timeout: this.opts.stepTimeoutMs });
           await editor.settle(1000);
-          if (await this.declineConsent(editor, 5_000))
+          await editor.declineConsent(5_000);
+          if (editor.consentDeclines > declines)
             notes.push(
               'With viewer credentials Looker Studio asks every viewer, editors included, to grant consent ("Grant consent") before it loads data.',
             );
@@ -2367,31 +2375,8 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     });
   }
 
-  // Viewer's credentials make Looker Studio ask the signed-in account for consent
-  // to read data as itself, over the whole editor. It is each viewer's own
-  // choice, so it is declined, not granted.
-  private async declineConsent(editor: LookerStudioEditor, timeoutMs: number): Promise<boolean> {
-    const consent = editor.page.locator('mat-dialog-container, [role=dialog]', {
-      hasText: 'Grant consent',
-    });
-    const shown = await consent
-      .first()
-      .waitFor({ timeout: timeoutMs })
-      .then(
-        () => true,
-        () => false,
-      );
-    if (!shown) return false;
-    await consent
-      .first()
-      .getByRole('button', { name: /^cancel$/i })
-      .click();
-    await editor.settle(800);
-    return true;
-  }
-
   private async openSourcesPanel(editor: LookerStudioEditor): Promise<void> {
-    await this.declineConsent(editor, 1_500);
+    await editor.declineConsent(1_500);
     await editor.clickMenu('Resource', ['Manage added data sources']);
     await this.waitForSourceRows(editor);
     await editor.settle(500);

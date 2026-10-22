@@ -511,7 +511,7 @@ export async function screenshotReport(
   repo: ReportRepository,
   report: string,
   page?: number,
-): Promise<string> {
+): Promise<{ path: string; notes: string[] }> {
   return repo.screenshot(parseReportId(report), page);
 }
 

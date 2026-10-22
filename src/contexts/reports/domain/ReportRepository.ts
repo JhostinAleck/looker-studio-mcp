@@ -314,8 +314,9 @@ export interface ReportRepository {
     role: 'viewer' | 'editor',
     notify: boolean,
   ): Promise<void>;
-  // PNG of the report in view mode; returns the saved file path.
-  screenshot(reportId: string, page?: number): Promise<string>;
+  // PNG of the report in view mode: the saved file path, and notes on what it
+  // could not show (charts waiting for the viewer's consent).
+  screenshot(reportId: string, page?: number): Promise<{ path: string; notes: string[] }>;
   deleteReport(reportId: string): Promise<void>;
   // ── Community visualizations ──
   addCommunityViz(

@@ -69,4 +69,32 @@ describe('formatReportCheck', () => {
         '  Details: The query returned an error. / boom',
     );
   });
+
+  it('explains consent problems once, after the list', () => {
+    const consent = {
+      page: 1,
+      kind: 'Scorecard',
+      problem: 'consent' as const,
+      message: 'Consent required: This component requires your consent to load data.',
+    };
+    const out = formatReportCheck({
+      pages: [{ index: 1 }],
+      components: 2,
+      problems: [consent, { ...consent, index: 1 }].map((p, i) => ({ ...p, index: i })),
+    });
+    expect(out.match(/viewer's credentials/g)).toHaveLength(1);
+    expect(
+      out.endsWith("set the data source's credentials to owner with update_data_source."),
+    ).toBe(true);
+    expect(out).toContain('declined that prompt instead of granting it');
+  });
+
+  it('adds no consent note to other problems', () => {
+    const out = formatReportCheck({
+      pages: [{ index: 1 }],
+      components: 1,
+      problems: [{ page: 1, index: 0, kind: 'Table', problem: 'no_data', message: 'No data' }],
+    });
+    expect(out).not.toContain('consent');
+  });
 });
