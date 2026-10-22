@@ -93,6 +93,14 @@ function fakeRepo(): ReportRepository {
     inOneVisit: vi.fn(async (_id: string, work: () => Promise<unknown>) => work()) as never,
     dataSourceNames: vi.fn(async () => []),
     readReport: vi.fn(),
+    copyReport: vi.fn(async () => ({ id: ID, name: 'Copy', url: 'u', replaced: [] })),
+    setLinkSharing: vi.fn(async (_id, sharing) => sharing),
+    scheduleDelivery: vi.fn(async () => ({})),
+    getDelivery: vi.fn(async () => null),
+    removeDelivery: vi.fn(async () => true),
+    listVersions: vi.fn(async () => []),
+    restoreVersion: vi.fn(),
+    getEmbed: vi.fn(),
   };
 }
 

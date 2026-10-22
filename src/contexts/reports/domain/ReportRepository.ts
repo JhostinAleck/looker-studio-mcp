@@ -23,6 +23,16 @@ import type {
   DataSourceRow,
   FieldChange,
 } from './DataSource.js';
+import type {
+  CopiedReport,
+  DataSourceReplacement,
+  DeliveryInfo,
+  DeliverySchedule,
+  EmbedInfo,
+  EmbedOptions,
+  LinkSharing,
+  ReportVersion,
+} from './reportOps.js';
 
 export interface ReportPage {
   index: number;
@@ -344,6 +354,25 @@ export interface ReportRepository {
   dataSourceNames(reportId: string): Promise<string[]>;
   // Reads the whole report back (read only): pages, components, data sources.
   readReport(reportId: string, style: StyleDepth): Promise<ReportSnapshot>;
+
+  // ── Report operations ──
+  // File › Make a copy; `replacements` reconnect data sources of the copy.
+  copyReport(
+    reportId: string,
+    name: string,
+    replacements: DataSourceReplacement[],
+  ): Promise<CopiedReport>;
+  setLinkSharing(reportId: string, sharing: LinkSharing): Promise<LinkSharing>;
+  // Creates the report's email schedule, or replaces the existing one.
+  scheduleDelivery(reportId: string, schedule: DeliverySchedule): Promise<DeliveryInfo>;
+  // The signed-in account's schedule of the report; null when there is none.
+  getDelivery(reportId: string): Promise<DeliveryInfo | null>;
+  // False when the report had no schedule.
+  removeDelivery(reportId: string): Promise<boolean>;
+  listVersions(reportId: string): Promise<ReportVersion[]>;
+  restoreVersion(reportId: string, version: number | string): Promise<ReportVersion>;
+  // Turns embedding on when it is off.
+  getEmbed(reportId: string, opts: EmbedOptions): Promise<EmbedInfo>;
 }
 
 // ── Report specs ──

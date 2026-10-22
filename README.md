@@ -102,6 +102,8 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `check_report` | Every chart of a report (or a page) that shows "No data", a configuration error, a data set error (Too Many Rows, BigQuery errors) or is still loading, with page, index, kind, fields and Looker's details ([docs](docs/check-report.md)) |
 | `list_data_sources` | Data sources of a report: name, alias (ds0…), table or custom query SQL, charts using it, data credentials, data freshness; `fields: true` adds each field's type and aggregation |
 | `export_report_spec` | Read a report into a JSON spec (theme, data sources, pages, components with fields and main style) that `apply_report_spec` rebuilds |
+| `list_deliveries` | The report's email delivery schedule (recipients, pages, start, repeat, time), if any |
+| `list_versions` | File › Version history: index, name or date, and authors of each version, newest first |
 
 ### Write tools (require writes)
 
@@ -136,6 +138,11 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `update_field` | Change a data source field's type (Number, Text, Date…), default aggregation and/or name |
 | `apply_actions` | Run a list of editing actions (any of the tools above, same arguments) in one editor visit: validated first, a result per action |
 | `apply_report_spec` | Build a report from a JSON spec, or add the missing pages and components to an existing one, in one visit |
+| `copy_report` | File › Make a copy under a new name; `data_sources` reconnects embedded data sources of the copy to another table, view or custom query. Returns the new id and URL |
+| `set_link_sharing` | Link settings: restricted, unlisted (anyone with the link) or public, with the link's role (viewer/editor) |
+| `schedule_delivery`, `remove_delivery` | Email the report on a schedule: recipients, start date, time, repeat (daily, weekly, monthly, weekdays, custom every N days/weeks/months), pages; or delete the schedule |
+| `restore_version` | Restore a version by its index or label from `list_versions` |
+| `get_embed_code` | File › Embed report: turns embedding on if needed and returns the iframe code and embed URL (width, height, page, navigation) |
 
 Settings are addressed by the **label the properties panel shows** (`"Bar color"`, `"Show data labels"`, `"Border radius"`…). `describe_component` lists them; settings that do not exist come back as warnings instead of failing silently.
 
@@ -190,6 +197,11 @@ See [docs/design-guide.md](docs/design-guide.md) for the canvas grid, the card p
 - `check_report` opens the editor, so it needs edit access, and reads the English messages of Looker Studio.
 - Community visualizations define their own Setup slots and Style settings: use `describe_component` to read them. `add_community_viz` accepts the gallery's consent prompt for you.
 - `share_report` opens a visible Chrome window for a few seconds: Google refuses invitations sent from a headless browser. It sends one invitation per address, since a batch fails with "An unknown error occurred".
+- `set_link_sharing`, `schedule_delivery` and `remove_delivery` also open a visible window: Google refuses link changes and schedules from a headless browser.
+- `copy_report` copies only the data sources a component uses (an unused one is dropped, and a report with no chart loses its data). Only embedded data sources can be reconnected: a reusable one is shared with other reports, so the tool refuses it. Looker Studio names the copy in the account language; the tool renames it.
+- `schedule_delivery`: one schedule per report and account, and the signed-in account is always a recipient (its chip cannot be removed). The time zone is not editable from the dialog; times are half-hour slots. Weekly and monthly repeat on the weekday of the start date; custom repeats set only the interval and unit (no weekday picks). Filters of the Filters tab are not set. `list_deliveries` shows the schedule of one report: Looker Studio has no list of every schedule.
+- `list_versions`: the current version is the live draft, so edits within a few minutes are grouped into it; indexes shift after every save, so call `list_versions` right before `restore_version`.
+- `get_embed_code` returns the URL on the host the account uses (some accounts still get `datastudio.google.com`). "Public" link sharing can be turned off by a Google Workspace admin; the tool then fails with that message.
 
 ## Architecture
 

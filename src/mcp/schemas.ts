@@ -14,6 +14,7 @@ import {
 } from '@/contexts/reports/domain/ReportRepository.js';
 import type { ButtonSpec, DataSettings, FilterSpec } from '@/contexts/reports/domain/Report.js';
 import { CONNECTORS } from '@/contexts/reports/domain/connectors.js';
+import { LINK_ACCESS, REPEATS } from '@/contexts/reports/domain/reportOps.js';
 
 const projectId = z
   .string()
@@ -999,4 +1000,89 @@ export const applyReportSpecSchema = z.object({
     .describe('Update this report (add missing pages and components) instead of creating one'),
   name: z.string().min(1).optional().describe('Name of the new report; defaults to spec.name'),
   continue_on_error: z.boolean().default(false),
+});
+
+// ── Report operations ──
+
+export const copyReportSchema = z.object({
+  report_id: reportId,
+  name: z.string().min(1).describe('Name of the copy'),
+  data_sources: z
+    .array(
+      z.object({
+        original: z.string().min(1).describe('Data source name in the original report'),
+        ...sourceShape,
+      }),
+    )
+    .default([])
+    .describe(
+      'Data sources to reconnect in the copy (a table or view, or sql); the others are kept',
+    ),
+});
+
+export const setLinkSharingSchema = z.object({
+  report_id: reportId,
+  access: z
+    .enum(LINK_ACCESS)
+    .describe(
+      'restricted: only people added; unlisted: anyone with the link; public: anyone on the internet can find it',
+    ),
+  role: z
+    .enum(['viewer', 'editor'])
+    .optional()
+    .describe('What people with the link can do (unlisted/public); Viewer by default'),
+});
+
+export const scheduleDeliverySchema = z.object({
+  report_id: reportId,
+  recipients: z
+    .array(z.email())
+    .default([])
+    .describe('Extra recipients; the signed-in account always receives the email'),
+  start_date: z.string().optional().describe('YYYY-MM-DD; today when omitted'),
+  time: z
+    .string()
+    .optional()
+    .describe('HH:MM (24 h, :00 or :30) in the schedule time zone; 8:00 when omitted'),
+  repeat: z
+    .enum(REPEATS)
+    .optional()
+    .describe(
+      'daily (default), weekly / monthly (on the weekday of start_date), weekdays (Mon-Fri), custom',
+    ),
+  every: z
+    .object({
+      interval: z.number().int().positive(),
+      unit: z.enum(['day', 'week', 'month']).default('day'),
+    })
+    .optional()
+    .describe('repeat: custom only: every N days, weeks or months'),
+  pages: z
+    .array(z.string().min(1))
+    .optional()
+    .describe('Page names to send (multi-page reports); all pages when omitted'),
+});
+
+export const listDeliveriesSchema = z.object({ report_id: reportId });
+
+export const removeDeliverySchema = z.object({ report_id: reportId });
+
+export const listVersionsSchema = z.object({ report_id: reportId });
+
+export const restoreVersionSchema = z.object({
+  report_id: reportId,
+  version: z
+    .union([z.number().int().positive(), z.string().min(1)])
+    .describe('Index (2 or more) or label of the version, as list_versions shows it'),
+});
+
+export const getEmbedCodeSchema = z.object({
+  report_id: reportId,
+  page,
+  width: z.number().int().positive().optional().describe('iframe width in px (600 by default)'),
+  height: z.number().int().positive().optional().describe('iframe height in px (450 by default)'),
+  show_navigation: z
+    .boolean()
+    .optional()
+    .describe('Show the report navigation (pages) in the embedded report'),
 });
