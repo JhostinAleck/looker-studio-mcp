@@ -333,6 +333,8 @@ export const SEL = {
   // Page names in the Page › Manage pages panel.
   pageChip: '.nav-item-chip.page-chip .chip-text',
   panelTitle: 'properties-panel article.property-panel header .title',
+  // Panel title while several components are selected.
+  multipleSelection: 'Multiple Properties',
   // Field chips of the Data panel (right side) carry the field name as aria-label.
   dataPanelChip: (field: string) => `div.common-chip[aria-label="${cssEscape(field)}"]`,
   // BigQuery connector › CUSTOM QUERY: a billing project row and the SQL editor.

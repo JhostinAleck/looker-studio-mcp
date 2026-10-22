@@ -404,9 +404,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       try {
         return await this.configureChart(editor, index, chart, opts);
       } catch (err) {
-        await editor.select(index).catch(() => undefined);
-        await editor.page.keyboard.press('Delete').catch(() => undefined);
-        await editor.settle().catch(() => undefined);
+        await editor.remove(index).catch(() => undefined);
         throw err;
       }
     });
@@ -581,9 +579,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         }
         return await this.finish(editor, index, opts.layout, warnings);
       } catch (err) {
-        await editor.select(index).catch(() => undefined);
-        await editor.page.keyboard.press('Delete').catch(() => undefined);
-        await editor.settle().catch(() => undefined);
+        await editor.remove(index).catch(() => undefined);
         throw err;
       }
     });
@@ -1653,13 +1649,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   async deleteComponent(reportId: string, index: number, page?: number): Promise<void> {
     await this.edit(reportId, async (editor) => {
       await this.goToPage(editor, page);
-      const before = (await editor.layouts()).length;
-      await editor.select(index);
-      await editor.page.keyboard.press('Delete');
-      await editor.settle();
-      if ((await editor.layouts()).length !== before - 1) {
-        throw new EditorStepError(`component ${index} was not deleted`);
-      }
+      await editor.remove(index);
     });
   }
 
@@ -2059,9 +2049,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       try {
         return await this.configureCommunityViz(editor, index, viz, opts);
       } catch (err) {
-        await editor.select(index).catch(() => undefined);
-        await editor.page.keyboard.press('Delete').catch(() => undefined);
-        await editor.settle().catch(() => undefined);
+        await editor.remove(index).catch(() => undefined);
         throw err;
       }
     });
