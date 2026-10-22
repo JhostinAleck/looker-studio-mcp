@@ -25,6 +25,20 @@ import type {
   ThemeSpec,
 } from '@/contexts/reports/domain/ReportRepository.js';
 import {
+  type CopiedReport,
+  type DataSourceReplacement,
+  type DeliveryInfo,
+  type DeliverySchedule,
+  type EmbedInfo,
+  type EmbedOptions,
+  type LinkSharing,
+  type ReportVersion,
+  REPEAT_OPTION,
+  findVersion,
+  scheduleDateLabel,
+  scheduleTimeLabel,
+} from '@/contexts/reports/domain/reportOps.js';
+import {
   type Aggregation,
   type BigQuerySource,
   type ChartSpec,
@@ -38,6 +52,7 @@ import {
   type Layout,
   type ReportSummary,
   type StyleSettings,
+  describeSource,
   filterClauses,
   isQuerySource,
   reportUrl,
@@ -55,6 +70,7 @@ import {
   PAGE_MENU,
   PANEL_TITLE_HINT,
   PRESET_ORDER,
+  REPORT_OPS,
   SECTION,
   SEL,
   SHAPE_PATHS,
@@ -1943,6 +1959,620 @@ export class LookerStudioUiReportRepository implements ReportRepository {
           .click({ timeout: 5_000 })
           .catch(() => undefined);
         await link.waitFor({ state: 'detached', timeout: this.opts.stepTimeoutMs });
+      });
+    });
+  }
+
+  // ── Report operations ──
+
+  // File › Make a copy posts a form that opens the copy in a new tab. The
+  // form's xsrf field stays empty under automation and the copy fails with a
+  // 400, so it gets the RAP_XSRF_TOKEN cookie. Looker Studio names the copy
+  // "Copy of …" in the account language: it is renamed after. Only data
+  // sources that a component uses are copied.
+  async copyReport(
+    reportId: string,
+    name: string,
+    replacements: DataSourceReplacement[],
+  ): Promise<CopiedReport> {
+    const timeout = this.opts.stepTimeoutMs;
+    const id = await this.opts.browser.withPage(async (page) => {
+      const editor = await LookerStudioEditor.openReport(page, reportId, timeout);
+      await editor.clickMenu('File', ['Make a copy...']);
+      return editor.step('make a copy of the report', async () => {
+        const dialog = page.locator(REPORT_OPS.legacyDialog, {
+          hasText: REPORT_OPS.copyDialogTitle,
+        });
+        await dialog.waitFor({ timeout });
+        await editor.settle(1000);
+        await page.evaluate(
+          ({ input, cookie }) => {
+            const field = document.querySelector<HTMLInputElement>(input);
+            const token = new RegExp(`(?:^|;\\s*)${cookie}=([^;]+)`).exec(document.cookie)?.[1];
+            if (field && !field.value && token) field.value = decodeURIComponent(token);
+          },
+          { input: REPORT_OPS.copyXsrfInput, cookie: REPORT_OPS.xsrfCookie },
+        );
+        const opened = page.context().waitForEvent('page', { timeout });
+        await dialog.getByRole('button', { name: REPORT_OPS.copyButton }).click();
+        const tab = await opened;
+        try {
+          await tab
+            .waitForURL(/\/reporting\/[0-9a-f-]{36}/i, { timeout, waitUntil: 'commit' })
+            .catch(() => {
+              throw new Error(`Looker Studio did not open the copy (stopped at ${tab.url()})`);
+            });
+          return /\/reporting\/([0-9a-f-]{36})/i.exec(tab.url())![1]!.toLowerCase();
+        } finally {
+          await tab.close().catch(() => undefined);
+        }
+      });
+    });
+    const replaced: string[] = [];
+    try {
+      await this.edit(id, async (editor) => {
+        await editor.rename(name);
+        for (const replacement of replacements) {
+          replaced.push(await this.reconnectSource(editor, replacement));
+        }
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new EditorStepError(`${reason} (the copy was created: ${reportUrl(id, 'edit')})`);
+    }
+    return { id, name, url: reportUrl(id), replaced };
+  }
+
+  // Embedded data sources belong to the report, so a copy can change its own.
+  // A reusable one is shared: reconnecting it would change every report using it.
+  private async reconnectSource(
+    editor: LookerStudioEditor,
+    { original, source }: DataSourceReplacement,
+  ): Promise<string> {
+    const page = editor.page;
+    await editor.clickMenu('Resource', ['Manage added data sources']);
+    await page.locator('tr, [role=row]').nth(1).waitFor({ timeout: this.opts.stepTimeoutMs });
+    const rows = await page.evaluate(() =>
+      [...document.querySelectorAll('tr, [role=row]')].slice(1).map((row) => {
+        const cells = [...row.querySelectorAll('td, [role=cell]')].map(
+          (c) => c.textContent?.trim() ?? '',
+        );
+        const button = [...row.querySelectorAll('button')].find((b) =>
+          /^edit$/i.test(b.textContent?.trim() ?? ''),
+        );
+        const r = button?.getBoundingClientRect();
+        return {
+          name: cells[0] ?? '',
+          // The Type cell also holds an icon name; match the word.
+          embedded: /\bEmbedded\b/.test((row as HTMLElement).innerText),
+          point: r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null,
+        };
+      }),
+    );
+    const row = rows.find((r) => r.name === original);
+    if (!row?.point) {
+      throw new EditorStepError(
+        `the copy has no data source "${original}" (it has ${rows.map((r) => r.name).join(', ') || 'none'}; only data sources used by a component are copied)`,
+      );
+    }
+    if (!row.embedded) {
+      throw new EditorStepError(
+        `"${original}" is a reusable data source: reconnecting it would change every report that uses it`,
+      );
+    }
+    await page.mouse.click(row.point.x, row.point.y);
+    await editor.reconnectBigQuery(source);
+    const newName = isQuerySource(source) ? source.name : source.tableId;
+    await editor.step(`finish editing the data source ${original}`, async () => {
+      if (newName && newName !== original) {
+        const box = page.locator(SEL.dataSourceNameInput).filter({ visible: true });
+        const index = await box.evaluateAll(
+          (inputs, current) => inputs.findIndex((i) => (i as HTMLInputElement).value === current),
+          original,
+        );
+        if (index >= 0) {
+          await box.nth(index).fill(newName);
+          await box.nth(index).press('Enter');
+          await editor.settle(800);
+        }
+      }
+      await page.getByRole('button', { name: 'Done' }).first().click();
+      await editor.settle(800);
+    });
+    await this.closeSourcesPanel(editor);
+    return `${original} → ${newName ?? original} (${describeSource(source)})`;
+  }
+
+  // Share › Link settings. A change shows Save instead of Done; Google keeps
+  // the link role only for Unlisted and Public. Like invitations, Google
+  // refuses the change from a headless browser ("An unknown error occurred").
+  async setLinkSharing(reportId: string, sharing: LinkSharing): Promise<LinkSharing> {
+    return this.edit(
+      reportId,
+      async (editor) => {
+        const page = editor.page;
+        const dialog = page.locator('mat-dialog-container');
+        const labels = REPORT_OPS.linkAccessLabel;
+        const accessButton = dialog
+          .locator('button')
+          .filter({ hasText: new RegExp(`^\\s*(${Object.values(labels).join('|')})\\s*$`) })
+          .first();
+        const openDialog = async () => {
+          await page.getByRole('button', { name: /lets users share a report/ }).click();
+          await accessButton.waitFor({ timeout: this.opts.stepTimeoutMs });
+          await editor.settle(800);
+        };
+        const closeDialog = async () => {
+          await dialog
+            .getByRole('button', { name: 'Done', exact: true })
+            .click({ timeout: 5_000 })
+            .catch(() => page.keyboard.press('Escape'));
+          await dialog.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => undefined);
+        };
+        // The link's role button sits on the access button's row; people have their own.
+        const linkRole = () =>
+          dialog.evaluate((d) => {
+            const access = [...d.querySelectorAll<HTMLElement>('button')].find((b) =>
+              /^(Restricted|Unlisted|Public)$/.test(b.innerText.trim()),
+            );
+            if (!access) return null;
+            const y = access.getBoundingClientRect().y + access.getBoundingClientRect().height / 2;
+            const role = [...d.querySelectorAll<HTMLElement>('button')].find((b) => {
+              const r = b.getBoundingClientRect();
+              return (
+                /^(Viewer|Editor)$/.test(b.innerText.trim()) &&
+                Math.abs(r.y + r.height / 2 - y) < 30
+              );
+            });
+            if (!role) return null;
+            const r = role.getBoundingClientRect();
+            return { text: role.innerText.trim(), x: r.x + r.width / 2, y: r.y + r.height / 2 };
+          });
+        const pick = async (label: string) => {
+          const item = page
+            .locator('.cdk-overlay-container [role=menuitem]')
+            .filter({ hasText: new RegExp(`^\\s*${label}\\b`) })
+            .first();
+          if (!(await item.isVisible({ timeout: 5_000 }).catch(() => false))) {
+            await page.keyboard.press('Escape');
+            throw new Error(`Looker Studio does not offer "${label}" here for this account`);
+          }
+          if ((await item.getAttribute('aria-disabled')) === 'true' || (await item.isDisabled())) {
+            await page.keyboard.press('Escape');
+            throw new Error(`"${label}" link sharing is turned off for this account`);
+          }
+          await item.click();
+          await editor.settle(600);
+        };
+
+        await editor.step(`set link sharing to ${sharing.access}`, async () => {
+          await openDialog();
+          const wanted = labels[sharing.access];
+          if ((await accessButton.innerText()).trim() !== wanted) {
+            await accessButton.click();
+            await pick(wanted);
+          }
+          if (sharing.access !== 'restricted') {
+            const wantedRole = sharing.role === 'editor' ? 'Editor' : 'Viewer';
+            const role = await linkRole();
+            if (!role) throw new Error('the role of the link was not found');
+            if (role.text !== wantedRole) {
+              await page.mouse.click(role.x, role.y);
+              await pick(wantedRole);
+            }
+          }
+          const save = dialog.getByRole('button', { name: 'Save', exact: true });
+          if (await save.isVisible().catch(() => false)) {
+            await save.click();
+            await editor.settle(1500);
+            // Saved: the dialog closes. Refused: it stays with a warning.
+            if (await dialog.isVisible().catch(() => false)) {
+              const refusal = (await dialog.innerText()).match(
+                /[^\n]*(unknown error|try again later)[^\n]*/i,
+              );
+              if (refusal) throw new Error(`Google refused the change: ${refusal[0].trim()}`);
+            }
+          }
+          await closeDialog();
+        });
+        // Read back what Google kept.
+        return editor.step('read the link sharing', async () => {
+          await openDialog();
+          const label = (await accessButton.innerText()).trim();
+          const access = (Object.keys(labels) as LinkSharing['access'][]).find(
+            (k) => labels[k] === label,
+          )!;
+          const role = access === 'restricted' ? null : await linkRole();
+          await closeDialog();
+          return {
+            access,
+            ...(role
+              ? { role: role.text === 'Editor' ? ('editor' as const) : ('viewer' as const) }
+              : {}),
+          };
+        });
+      },
+      { visible: true },
+    );
+  }
+
+  // Share › Schedule delivery opens either the report's schedule (with "Edit
+  // schedule") or an empty form (with Save).
+  private async openSchedule(editor: LookerStudioEditor): Promise<Locator> {
+    const page = editor.page;
+    await editor.step('open Share › Schedule delivery', async () => {
+      await editor.walkMenu(
+        () => page.getByRole('button', { name: REPORT_OPS.shareMoreOptions }).first().click(),
+        [REPORT_OPS.scheduleMenuItem],
+      );
+    });
+    const dialog = page.locator('mat-dialog-container', {
+      has: page.getByText(REPORT_OPS.scheduleTitle, { exact: true }),
+    });
+    await editor.step('load the email schedule', async () => {
+      await dialog
+        .getByRole('button', { name: new RegExp(`^(${REPORT_OPS.editSchedule}|Save)$`) })
+        .first()
+        .waitFor({ timeout: this.opts.stepTimeoutMs });
+      await editor.settle(800);
+    });
+    return dialog;
+  }
+
+  private async isScheduled(dialog: Locator): Promise<boolean> {
+    return dialog
+      .getByRole('button', { name: REPORT_OPS.editSchedule })
+      .isVisible()
+      .catch(() => false);
+  }
+
+  // Each row of the schedule summary is a label and its value; the
+  // recipients ("To") are chips without a label element.
+  private readSchedule(dialog: Locator): Promise<DeliveryInfo> {
+    return dialog.evaluate((d) => {
+      const info: Record<string, string> = {};
+      for (const label of d.querySelectorAll<HTMLElement>('label.left')) {
+        const name = label.innerText.trim();
+        const row = label.parentElement;
+        const value = row?.innerText.replace(name, '').replace(/\s+/g, ' ').trim() ?? '';
+        if (name && value) info[name] = value;
+        if (name === 'From') {
+          const chips = [...d.querySelectorAll<HTMLElement>('mat-chip-listbox mat-chip')];
+          const to = chips.map((c) => c.innerText.trim()).filter(Boolean);
+          if (to.length) info.To = to.join(', ');
+        }
+      }
+      return info;
+    });
+  }
+
+  private async closeSchedule(editor: LookerStudioEditor, dialog: Locator): Promise<void> {
+    await dialog
+      .getByRole('button', { name: 'Close' })
+      .click({ timeout: 5_000 })
+      .catch(() => editor.page.keyboard.press('Escape'));
+    await dialog.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => undefined);
+  }
+
+  // Google refuses to save a schedule from a headless browser ("Failed", a
+  // reCAPTCHA check), so this runs in a visible window. The signed-in account
+  // is always a recipient: its chip cannot be removed.
+  async scheduleDelivery(reportId: string, schedule: DeliverySchedule): Promise<DeliveryInfo> {
+    return this.edit(
+      reportId,
+      async (editor) => {
+        const page = editor.page;
+        const dialog = await this.openSchedule(editor);
+        const select = (label: string, nth = 1) =>
+          dialog.locator(
+            `xpath=.//label[normalize-space()="${label}"]/following::mat-select[${nth}]`,
+          );
+        const choose = async (control: Locator, option: RegExp, what: string) => {
+          await control.click({ force: true });
+          const item = page.getByRole('option', { name: option }).first();
+          // After the date box the first click can go missing: open it by keyboard.
+          if (
+            !(await page
+              .getByRole('option')
+              .first()
+              .isVisible({ timeout: 2_000 })
+              .catch(() => false))
+          ) {
+            await control.focus();
+            await page.keyboard.press('Space');
+          }
+          await item.waitFor({ timeout: 5_000 }).catch(async () => {
+            const offered = await page.getByRole('option').allInnerTexts();
+            await page.keyboard.press('Escape');
+            throw new Error(`no ${what} option ${option} (offered: ${offered.join(', ')})`);
+          });
+          await item.click();
+          await editor.settle(400);
+        };
+
+        await editor.step('fill the email schedule', async () => {
+          if (await this.isScheduled(dialog)) {
+            await dialog.getByRole('button', { name: REPORT_OPS.editSchedule }).click();
+            await dialog.getByRole('button', { name: 'Save', exact: true }).waitFor();
+          }
+          // Start from the signed-in account alone, then add each recipient.
+          const removable = dialog.locator('mat-chip-row button');
+          for (let n = await removable.count(); n > 0; n--) {
+            await removable.first().click();
+            await editor.settle(300);
+          }
+          const input = dialog.getByRole('combobox', { name: REPORT_OPS.scheduleRecipients });
+          for (const email of schedule.recipients) {
+            await input.click();
+            await page.keyboard.type(email, { delay: 15 });
+            await editor.settle(500);
+            await page.keyboard.press('Enter');
+            await editor.settle(300);
+            if (await input.inputValue())
+              throw new Error(`${email} was not accepted as a recipient`);
+          }
+          if (schedule.pages) {
+            const pages = select('Pages');
+            if (!(await pages.isVisible().catch(() => false))) {
+              throw new Error('pages only applies to reports with several pages');
+            }
+            await pages.click({ force: true });
+            const options = page.getByRole('option');
+            await options.first().waitFor({ timeout: 5_000 });
+            const names = (await options.allInnerTexts()).map((t) => t.trim());
+            const unknown = schedule.pages.filter((p) => !names.includes(p));
+            if (unknown.length) {
+              await page.keyboard.press('Escape');
+              throw new Error(`no page ${unknown.join(', ')} (the report has ${names.join(', ')})`);
+            }
+            for (const [i, pageName] of names.entries()) {
+              const option = options.nth(i);
+              const selected = (await option.getAttribute('aria-selected')) === 'true';
+              if (selected !== schedule.pages.includes(pageName)) {
+                await option.click();
+                await editor.settle(300);
+              }
+            }
+            await page.keyboard.press('Escape');
+            await editor.settle(400);
+          }
+          if (schedule.startDate) {
+            const label = scheduleDateLabel(schedule.startDate);
+            const date = dialog.locator(REPORT_OPS.scheduleDate);
+            await date.fill(label);
+            await date.press('Enter');
+            // Focusing the box opens the calendar, which then swallows the
+            // next click: close it through its backdrop.
+            const backdrop = page.locator(REPORT_OPS.datepickerBackdrop).first();
+            if (await backdrop.isVisible({ timeout: 2_000 }).catch(() => false)) {
+              await backdrop.click({ force: true });
+              await backdrop.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => undefined);
+            }
+            await editor.settle(400);
+            const shown = await date.inputValue();
+            if (shown !== label) throw new Error(`the start date shows "${shown}", not ${label}`);
+          }
+          if (schedule.repeat) {
+            const option = REPEAT_OPTION[schedule.repeat];
+            await choose(select('Repeat'), new RegExp(`^\\s*${option}`), 'Repeat');
+            if (schedule.repeat === 'custom' && schedule.every) {
+              const every = dialog.locator(
+                'xpath=.//label[normalize-space()="Repeat"]/following::input[@type="number"][1]',
+              );
+              await every.fill(String(schedule.every.interval));
+              await choose(
+                select('Repeat', 2),
+                new RegExp(`^\\s*${schedule.every.unit}s?\\s*$`, 'i'),
+                'Every',
+              );
+            }
+          }
+          if (schedule.time) {
+            const label = scheduleTimeLabel(schedule.time);
+            await choose(select('Time'), new RegExp(`^\\s*${label}\\s*$`), 'Time');
+          }
+        });
+        await editor.step('save the email schedule', async () => {
+          await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+          // Google answers in a snack bar: "Report scheduled", "Schedule updated" or "Failed".
+          const snack = page.locator('.mat-mdc-snack-bar-container').first();
+          await snack.waitFor({ timeout: this.opts.stepTimeoutMs });
+          const said = (await snack.innerText()).trim();
+          if (!/scheduled|updated/i.test(said)) throw new Error(`Looker Studio answered "${said}"`);
+          await dialog.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => undefined);
+        });
+        const saved = await this.openSchedule(editor);
+        const info = await this.readSchedule(saved);
+        await this.closeSchedule(editor, saved);
+        return info;
+      },
+      { visible: true },
+    );
+  }
+
+  async getDelivery(reportId: string): Promise<DeliveryInfo | null> {
+    return this.edit(reportId, async (editor) => {
+      const dialog = await this.openSchedule(editor);
+      const info = (await this.isScheduled(dialog)) ? await this.readSchedule(dialog) : null;
+      await this.closeSchedule(editor, dialog);
+      return info;
+    });
+  }
+
+  async removeDelivery(reportId: string): Promise<boolean> {
+    return this.edit(
+      reportId,
+      async (editor) => {
+        const page = editor.page;
+        const dialog = await this.openSchedule(editor);
+        if (!(await this.isScheduled(dialog))) {
+          await this.closeSchedule(editor, dialog);
+          return false;
+        }
+        await editor.walkMenu(
+          () => dialog.getByRole('button', { name: 'More options' }).click(),
+          [REPORT_OPS.deleteSchedule],
+        );
+        await editor.step('delete the email schedule', async () => {
+          const snack = page.locator('.mat-mdc-snack-bar-container').first();
+          await snack.waitFor({ timeout: this.opts.stepTimeoutMs });
+          const said = (await snack.innerText()).trim();
+          if (!/deleted/i.test(said)) throw new Error(`Looker Studio answered "${said}"`);
+        });
+        return true;
+      },
+      { visible: true },
+    );
+  }
+
+  private async openVersionHistory(editor: LookerStudioEditor): Promise<void> {
+    await editor.clickMenu('File', ['Version history', 'See version history']);
+    await editor.step('open the version history', async () => {
+      await editor.page
+        .locator(REPORT_OPS.versionItem)
+        .first()
+        .waitFor({ timeout: this.opts.stepTimeoutMs });
+      await editor.settle(1000);
+    });
+  }
+
+  // The version list is virtual-scrolled: read what is drawn, scroll a
+  // screen down, and join the batches where they overlap. With `click`, the
+  // row at that 1-based index is clicked once it is drawn.
+  private async scanVersions(editor: LookerStudioEditor, click?: number): Promise<ReportVersion[]> {
+    const page = editor.page;
+    const versions: ReportVersion[] = [];
+    const key = (v: { label: string; authors: string[] }) => `${v.label}|${v.authors.join(',')}`;
+    await page.evaluate(
+      (sel) => document.querySelector(sel)?.scrollTo(0, 0),
+      REPORT_OPS.versionViewport,
+    );
+    for (let round = 0; round < 200; round++) {
+      await editor.settle(300);
+      const batch = await page.evaluate(
+        (sel) => {
+          return [...document.querySelectorAll<HTMLElement>(sel.item)].map((row) => {
+            const name = row.querySelector<HTMLInputElement | HTMLElement>(sel.name);
+            const label =
+              name instanceof HTMLInputElement ? name.value : (name?.textContent?.trim() ?? '');
+            const current = !!row.querySelector(sel.current);
+            const authors = [...row.querySelectorAll(sel.authors)]
+              .filter((a) => !a.matches(sel.current))
+              .map((a) => a.textContent?.trim() ?? '')
+              .filter(Boolean);
+            // Click below the name box: a click on the box starts renaming.
+            const r = row.getBoundingClientRect();
+            return { label, current, authors, x: r.x + r.width / 2, y: r.y + r.height - 12 };
+          });
+        },
+        {
+          item: REPORT_OPS.versionItem,
+          name: REPORT_OPS.versionName,
+          authors: REPORT_OPS.versionAuthors,
+          current: REPORT_OPS.currentVersion,
+        },
+      );
+      let overlap = Math.min(versions.length, batch.length);
+      while (
+        overlap > 0 &&
+        !batch
+          .slice(0, overlap)
+          .every((b, i) => key(b) === key(versions[versions.length - overlap + i]!))
+      ) {
+        overlap--;
+      }
+      for (const row of batch.slice(overlap)) {
+        const version = {
+          index: versions.length + 1,
+          label: row.label,
+          current: row.current,
+          authors: row.authors,
+        };
+        versions.push(version);
+        if (click === version.index) {
+          await page.mouse.click(row.x, row.y);
+          await editor.settle(1500);
+          return versions;
+        }
+      }
+      const moved = await page.evaluate((sel) => {
+        const viewport = document.querySelector<HTMLElement>(sel);
+        if (!viewport) return false;
+        const before = viewport.scrollTop;
+        viewport.scrollBy(0, viewport.clientHeight * 0.8);
+        return viewport.scrollTop > before;
+      }, REPORT_OPS.versionViewport);
+      if (!moved) break;
+    }
+    if (click) throw new EditorStepError(`the report has no version ${click}`);
+    return versions;
+  }
+
+  async listVersions(reportId: string): Promise<ReportVersion[]> {
+    return this.edit(reportId, async (editor) => {
+      await this.openVersionHistory(editor);
+      return this.scanVersions(editor);
+    });
+  }
+
+  async restoreVersion(reportId: string, wanted: number | string): Promise<ReportVersion> {
+    return this.edit(reportId, async (editor) => {
+      const page = editor.page;
+      await this.openVersionHistory(editor);
+      const versions = await this.scanVersions(editor);
+      const version = findVersion(versions, wanted);
+      if (!version) {
+        throw new EditorStepError(
+          `no version ${JSON.stringify(wanted)} (the report has ${versions.length}; see list_versions)`,
+        );
+      }
+      if (version.current) throw new EditorStepError(`version ${version.index} is the current one`);
+      await this.scanVersions(editor, version.index);
+      await editor.step(`restore the version of ${version.label}`, async () => {
+        await page.getByRole('button', { name: REPORT_OPS.restoreButton }).click();
+        const confirm = page.locator('mat-dialog-container', { hasText: 'Restore this version?' });
+        await confirm.waitFor({ timeout: this.opts.stepTimeoutMs });
+        await confirm.getByRole('button', { name: 'Restore', exact: true }).click();
+        await confirm.waitFor({ state: 'hidden', timeout: this.opts.stepTimeoutMs });
+        await editor.settle(2000);
+      });
+      return version;
+    });
+  }
+
+  // File › Embed report. The iframe shows the page that is open, so go there first.
+  async getEmbed(reportId: string, opts: EmbedOptions): Promise<EmbedInfo> {
+    return this.edit(reportId, async (editor) => {
+      const page = editor.page;
+      await this.goToPage(editor, opts.page);
+      await editor.clickMenu('File', ['Embed report']);
+      return editor.step('read the embed code', async () => {
+        const dialog = page.locator(REPORT_OPS.embedDialog);
+        await dialog.waitFor({ timeout: this.opts.stepTimeoutMs });
+        const checked = (box: Locator) =>
+          box.getAttribute('aria-checked').then((v) => v === 'true');
+        const enable = dialog.getByRole('checkbox', { name: REPORT_OPS.embedEnable });
+        const wasOn = await checked(enable);
+        if (!wasOn) await enable.click();
+        const code = dialog.locator('textarea');
+        await code.waitFor({ timeout: this.opts.stepTimeoutMs });
+        if (opts.showNavigation !== undefined) {
+          const nav = dialog.getByRole('checkbox', { name: REPORT_OPS.embedNavigation });
+          if ((await checked(nav)) !== opts.showNavigation) await nav.click();
+        }
+        const size = dialog.locator('input[type=number]');
+        for (const [i, value] of [opts.width, opts.height].entries()) {
+          if (value === undefined) continue;
+          await size.nth(i).fill(String(value));
+          await size.nth(i).press('Tab');
+        }
+        await editor.settle(600);
+        const html = (await code.inputValue()).trim();
+        const url = /src="([^"]+)"/.exec(html)?.[1];
+        if (!url) throw new Error('the embed code has no URL');
+        await dialog.getByRole('button', { name: /^done$/i }).click();
+        await editor.settle(800);
+        return { code: html, url, enabled: !wasOn };
       });
     });
   }

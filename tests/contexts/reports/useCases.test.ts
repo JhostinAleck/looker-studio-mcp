@@ -69,6 +69,14 @@ function fakeRepo(): ReportRepository {
     shareReport: vi.fn(async () => undefined),
     screenshot: vi.fn(),
     deleteReport: vi.fn(async () => undefined),
+    copyReport: vi.fn(async () => ({ id: ID, name: 'Copy', url: 'u', replaced: [] })),
+    setLinkSharing: vi.fn(async (_id, sharing) => sharing),
+    scheduleDelivery: vi.fn(async () => ({})),
+    getDelivery: vi.fn(async () => null),
+    removeDelivery: vi.fn(async () => true),
+    listVersions: vi.fn(async () => []),
+    restoreVersion: vi.fn(),
+    getEmbed: vi.fn(),
   };
 }
 

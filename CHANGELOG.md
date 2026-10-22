@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- New tool `copy_report`: File › Make a copy under a new name, optionally reconnecting embedded data sources of the copy to another table, view or custom query; returns the new id and URL.
+- New tool `set_link_sharing`: Share › Link settings to restricted, unlisted (anyone with the link) or public, with the role of people with the link.
+- New tool `schedule_delivery`: Share › Schedule delivery (recipients, start date, time, repeat, pages); creates or replaces the report's schedule.
+- New tool `list_deliveries`: shows the report's email delivery schedule.
+- New tool `remove_delivery`: deletes the report's email delivery schedule.
+- New tool `list_versions`: File › Version history, newest first, with index, name or date and authors.
+- New tool `restore_version`: restores a version by index or label.
+- New tool `get_embed_code`: File › Embed report: turns embedding on if needed and returns the iframe code and embed URL (size, page, navigation).
 - `create_report`, `add_data_source` and `build_report_link` take a custom query: `sql` instead of `dataset_id` and `table_id`, with `project_id` as the billing project. `source_name` names the data source; without it Looker Studio names it after the first table in the query.
 - Filters take several clauses (`clauses`: AND groups of OR clauses). Filter values are typed with the editor's suggestions off: with them on, a typed value that the editor could not suggest was dropped and the filter was saved empty.
 - `date_range` takes fixed dates (`2026-10-01..2026-10-15`).

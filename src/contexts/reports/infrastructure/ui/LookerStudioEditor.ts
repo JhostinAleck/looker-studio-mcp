@@ -1700,4 +1700,53 @@ export class LookerStudioEditor {
       return id;
     });
   }
+
+  // ── Report operations ──
+
+  // In an open data source editor: Edit Connection, pick the new table or
+  // query, RECONNECT and accept the field changes. A data source of a fresh
+  // copy opens straight on the connector, waiting for RECONNECT.
+  async reconnectBigQuery(source: BigQuerySource): Promise<void> {
+    await this.step(`reconnect the data source to ${describeSource(source)}`, async () => {
+      const reconnect = this.page.getByRole('button', { name: /^reconnect$/i });
+      // Its accessible name is "Go back"; the label is its text.
+      const back = this.page.locator('button', { hasText: /^\s*Edit Connection\s*$/ });
+      await reconnect.or(back).first().waitFor({ timeout: this.timeoutMs });
+      if (!(await reconnect.isVisible().catch(() => false))) {
+        await back.click();
+        await reconnect.waitFor({ timeout: this.timeoutMs });
+      }
+      if (isQuerySource(source)) {
+        await this.fillCustomQuery(source.projectId, source.sql);
+      } else {
+        // A custom query source opens on its CUSTOM QUERY tab.
+        const manual = this.page.getByPlaceholder('Enter Project Id manually');
+        if (!(await manual.isVisible().catch(() => false)))
+          await this.clickVisibleText('Recent Projects');
+        const { projectId, datasetId, tableId } = source;
+        // The dataset list can spin for a long time: start over once.
+        await this.pickTable(projectId, datasetId, tableId).catch(async () => {
+          await this.clickVisibleText('Recent Projects');
+          await this.pickTable(projectId, datasetId, tableId);
+        });
+      }
+      await reconnect.click();
+      const apply = this.page.locator('mat-dialog-container', {
+        hasText: 'Apply Connection Changes',
+      });
+      const same = this.page.locator('mat-dialog-container', {
+        hasText: 'No connection changes were found',
+      });
+      await apply.or(same).first().waitFor({ timeout: this.timeoutMs });
+      if (await apply.isVisible().catch(() => false)) {
+        await apply.getByRole('button', { name: 'Apply' }).click();
+      } else {
+        await same.getByRole('button', { name: 'Continue' }).click();
+      }
+      await this.page
+        .getByRole('button', { name: 'REFRESH FIELDS' })
+        .waitFor({ timeout: this.timeoutMs });
+    });
+    await this.settle(800);
+  }
 }

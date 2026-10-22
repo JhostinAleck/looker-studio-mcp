@@ -98,6 +98,8 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `describe_component` | Every Setup/Style setting of a component with its exact label and value |
 | `screenshot_report` | PNG of a page in view mode, returned as an image |
 | `build_report_link` | A Linking API URL that creates a report from BigQuery tables or custom queries |
+| `list_deliveries` | The report's email delivery schedule (recipients, pages, start, repeat, time), if any |
+| `list_versions` | File › Version history: index, name or date, and authors of each version, newest first |
 
 ### Write tools (require writes)
 
@@ -126,6 +128,11 @@ Write tools are registered only when **both** `writes.enabled: true` is in the c
 | `set_theme` | Built-in theme, custom theme settings, page size, Layout settings (tab navigation, header) |
 | `share_report` | Invite several people at once as viewers or editors; existing access is changed in place |
 | `add_page`, `rename_page`, `manage_page`, `rename_report`, `delete_report` | Report management; `manage_page` deletes, duplicates, hides/shows and reorders pages |
+| `copy_report` | File › Make a copy under a new name; `data_sources` reconnects embedded data sources of the copy to another table, view or custom query. Returns the new id and URL |
+| `set_link_sharing` | Link settings: restricted, unlisted (anyone with the link) or public, with the link's role (viewer/editor) |
+| `schedule_delivery`, `remove_delivery` | Email the report on a schedule: recipients, start date, time, repeat (daily, weekly, monthly, weekdays, custom every N days/weeks/months), pages; or delete the schedule |
+| `restore_version` | Restore a version by its index or label from `list_versions` |
+| `get_embed_code` | File › Embed report: turns embedding on if needed and returns the iframe code and embed URL (width, height, page, navigation) |
 
 Settings are addressed by the **label the properties panel shows** (`"Bar color"`, `"Show data labels"`, `"Border radius"`…). `describe_component` lists them; settings that do not exist come back as warnings instead of failing silently.
 
@@ -164,6 +171,11 @@ See [docs/design-guide.md](docs/design-guide.md) for the canvas grid, the card p
 - Custom queries: always pass `source_name`, cast columns whose type Looker Studio may guess wrong, and dry-run the SQL first ([details](docs/custom-queries.md)).
 - Community visualizations are not covered: they need a third-party component URL and its own permission prompt.
 - `share_report` opens a visible Chrome window for a few seconds: Google refuses invitations sent from a headless browser. It sends one invitation per address, since a batch fails with "An unknown error occurred".
+- `set_link_sharing`, `schedule_delivery` and `remove_delivery` also open a visible window: Google refuses link changes and schedules from a headless browser.
+- `copy_report` copies only the data sources a component uses (an unused one is dropped, and a report with no chart loses its data). Only embedded data sources can be reconnected: a reusable one is shared with other reports, so the tool refuses it. Looker Studio names the copy in the account language; the tool renames it.
+- `schedule_delivery`: one schedule per report and account, and the signed-in account is always a recipient (its chip cannot be removed). The time zone is not editable from the dialog; times are half-hour slots. Weekly and monthly repeat on the weekday of the start date; custom repeats set only the interval and unit (no weekday picks). Filters of the Filters tab are not set. `list_deliveries` shows the schedule of one report: Looker Studio has no list of every schedule.
+- `list_versions`: the current version is the live draft, so edits within a few minutes are grouped into it; indexes shift after every save, so call `list_versions` right before `restore_version`.
+- `get_embed_code` returns the URL on the host the account uses (some accounts still get `datastudio.google.com`). "Public" link sharing can be turned off by a Google Workspace admin; the tool then fails with that message.
 
 ## Architecture
 

@@ -46,6 +46,14 @@ import { handleScreenshotReport } from './tools/screenshot-report.tool.js';
 import { handleSetTheme } from './tools/set-theme.tool.js';
 import { handleShareReport } from './tools/share-report.tool.js';
 import { handleUpdateComponent } from './tools/update-component.tool.js';
+import { handleCopyReport } from './tools/copy-report.tool.js';
+import { handleSetLinkSharing } from './tools/set-link-sharing.tool.js';
+import { handleScheduleDelivery } from './tools/schedule-delivery.tool.js';
+import { handleListDeliveries } from './tools/list-deliveries.tool.js';
+import { handleRemoveDelivery } from './tools/remove-delivery.tool.js';
+import { handleListVersions } from './tools/list-versions.tool.js';
+import { handleRestoreVersion } from './tools/restore-version.tool.js';
+import { handleGetEmbedCode } from './tools/get-embed-code.tool.js';
 
 export interface ToolDeps extends BigQueryToolDeps, ReportToolDeps, CheckAuthDeps, WriteDeps {}
 
@@ -416,6 +424,77 @@ const TOOLS: ToolDef[] = [
     schema: schemas.deleteReportSchema,
     write: true,
     run: handleDeleteReport,
+  },
+  {
+    name: 'copy_report',
+    title: 'Copy a report',
+    description:
+      'File › Make a copy under a new name. data_sources reconnects embedded data sources of the copy to another BigQuery table/view or custom query; the others are kept. Returns the new id and URL.',
+    schema: schemas.copyReportSchema,
+    write: true,
+    run: handleCopyReport,
+  },
+  {
+    name: 'set_link_sharing',
+    title: 'Set link sharing',
+    description:
+      'Share › Link settings: restricted (only people added), unlisted (anyone with the link) or public (anyone on the internet), with the role people with the link get.',
+    schema: schemas.setLinkSharingSchema,
+    write: true,
+    run: handleSetLinkSharing,
+  },
+  {
+    name: 'schedule_delivery',
+    title: 'Schedule email delivery',
+    description:
+      "Share › Schedule delivery: email the report on a schedule: recipients, start date, time, repeat and pages. Replaces the report's existing schedule. The signed-in account always receives it.",
+    schema: schemas.scheduleDeliverySchema,
+    write: true,
+    run: handleScheduleDelivery,
+  },
+  {
+    name: 'list_deliveries',
+    title: 'Show the email schedule',
+    description:
+      "The signed-in account's email delivery schedule of a report (recipients, pages, start, repeat, time), if any.",
+    schema: schemas.listDeliveriesSchema,
+    write: false,
+    run: handleListDeliveries,
+  },
+  {
+    name: 'remove_delivery',
+    title: 'Delete the email schedule',
+    description: "Delete the signed-in account's email delivery schedule of a report.",
+    schema: schemas.removeDeliverySchema,
+    write: true,
+    run: handleRemoveDelivery,
+  },
+  {
+    name: 'list_versions',
+    title: 'List report versions',
+    description:
+      'File › Version history: the saved versions of a report, newest first, with index, name or date, and authors.',
+    schema: schemas.listVersionsSchema,
+    write: false,
+    run: handleListVersions,
+  },
+  {
+    name: 'restore_version',
+    title: 'Restore a report version',
+    description:
+      'Restore a version from File › Version history, by its index or label from list_versions.',
+    schema: schemas.restoreVersionSchema,
+    write: true,
+    run: handleRestoreVersion,
+  },
+  {
+    name: 'get_embed_code',
+    title: 'Get the embed code',
+    description:
+      'File › Embed report: turn embedding on if needed and return the iframe code and embed URL (size, page, navigation).',
+    schema: schemas.getEmbedCodeSchema,
+    write: true,
+    run: handleGetEmbedCode,
   },
 ];
 

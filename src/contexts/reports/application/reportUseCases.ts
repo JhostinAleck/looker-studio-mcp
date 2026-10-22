@@ -38,6 +38,17 @@ import {
   validateLayout,
   validateSettings,
 } from '@/contexts/reports/domain/Report.js';
+import {
+  type CopiedReport,
+  type DataSourceReplacement,
+  type DeliveryInfo,
+  type DeliverySchedule,
+  type EmbedInfo,
+  type EmbedOptions,
+  type LinkSharing,
+  type ReportVersion,
+  validateSchedule,
+} from '@/contexts/reports/domain/reportOps.js';
 import { DomainError } from '@/shared-kernel/errors/DomainError.js';
 
 export class ReportNameMismatchError extends DomainError {
@@ -500,4 +511,97 @@ export async function deleteReport(
     throw new ReportNameMismatchError(found?.name ?? null, confirmName);
   }
   await repo.deleteReport(id);
+}
+
+// ── Report operations ──
+
+export async function copyReport(
+  repo: ReportRepository,
+  report: string,
+  name: string,
+  replacements: DataSourceReplacement[] = [],
+): Promise<CopiedReport> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new InvalidChartError('Give the copy a name.');
+  const originals = replacements.map((r) => r.original.trim());
+  if (originals.some((o) => !o)) throw new InvalidChartError('Name the data source to replace.');
+  const twice = originals.filter((o, i) => originals.indexOf(o) !== i);
+  if (twice.length) {
+    throw new InvalidChartError(`Data sources replaced twice: ${[...new Set(twice)].join(', ')}.`);
+  }
+  return repo.copyReport(parseReportId(report), trimmed, replacements);
+}
+
+export async function setLinkSharing(
+  repo: ReportRepository,
+  report: string,
+  sharing: LinkSharing,
+): Promise<LinkSharing> {
+  if (sharing.access === 'restricted' && sharing.role) {
+    throw new InvalidChartError('role only applies to unlisted or public links.');
+  }
+  return repo.setLinkSharing(parseReportId(report), sharing);
+}
+
+export async function scheduleDelivery(
+  repo: ReportRepository,
+  report: string,
+  schedule: DeliverySchedule,
+): Promise<DeliveryInfo> {
+  const recipients = [
+    ...new Set(schedule.recipients.map((e) => e.trim().toLowerCase()).filter(Boolean)),
+  ];
+  const clean = { ...schedule, recipients };
+  validateSchedule(clean);
+  return repo.scheduleDelivery(parseReportId(report), clean);
+}
+
+export async function getDelivery(
+  repo: ReportRepository,
+  report: string,
+): Promise<DeliveryInfo | null> {
+  return repo.getDelivery(parseReportId(report));
+}
+
+export async function removeDelivery(repo: ReportRepository, report: string): Promise<boolean> {
+  return repo.removeDelivery(parseReportId(report));
+}
+
+export async function listVersions(
+  repo: ReportRepository,
+  report: string,
+): Promise<ReportVersion[]> {
+  return repo.listVersions(parseReportId(report));
+}
+
+export async function restoreVersion(
+  repo: ReportRepository,
+  report: string,
+  version: number | string,
+): Promise<ReportVersion> {
+  if (typeof version === 'number' && (!Number.isInteger(version) || version < 2)) {
+    throw new InvalidChartError(
+      'version is a 1-based index from list_versions; 1 is the current one.',
+    );
+  }
+  if (typeof version === 'string' && !version.trim()) {
+    throw new InvalidChartError('Give the version as its index or label from list_versions.');
+  }
+  return repo.restoreVersion(parseReportId(report), version);
+}
+
+export async function getEmbed(
+  repo: ReportRepository,
+  report: string,
+  opts: EmbedOptions = {},
+): Promise<EmbedInfo> {
+  for (const [key, value] of [
+    ['width', opts.width],
+    ['height', opts.height],
+  ] as const) {
+    if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
+      throw new InvalidChartError(`${key} must be a whole number of pixels.`);
+    }
+  }
+  return repo.getEmbed(parseReportId(report), opts);
 }

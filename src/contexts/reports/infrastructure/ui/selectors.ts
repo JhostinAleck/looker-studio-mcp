@@ -348,3 +348,42 @@ export const SEL = {
 export function cssEscape(value: string): string {
   return value.replace(/["\\]/g, '\\$&');
 }
+
+// ── Report operations ──
+// File › Make a copy, Share › Link settings, Share › Schedule delivery,
+// File › Version history and File › Embed report.
+export const REPORT_OPS = {
+  // AngularJS dialogs (md-dialog), unlike the Angular Material ones.
+  legacyDialog: 'md-dialog',
+  copyDialogTitle: 'Copy this report',
+  copyButton: 'Copy Report',
+  // The copy form posts with an xsrf field the dialog leaves empty here; the
+  // token is the RAP_XSRF_TOKEN cookie.
+  copyXsrfInput: 'md-dialog input[name=xsrf]',
+  xsrfCookie: 'RAP_XSRF_TOKEN',
+  // Share dialog: the link access button shows the current level.
+  linkAccessLabel: {
+    restricted: 'Restricted',
+    unlisted: 'Unlisted',
+    public: 'Public',
+  },
+  shareMoreOptions: 'More options',
+  scheduleMenuItem: 'Schedule delivery',
+  scheduleTitle: 'Email delivery',
+  scheduleRecipients: 'Search for person or group',
+  scheduleDate: 'input.mat-datepicker-input',
+  datepickerBackdrop: '.cdk-overlay-backdrop[class*=datepicker]',
+  scheduled: 'This report is scheduled',
+  editSchedule: 'Edit schedule',
+  deleteSchedule: 'Delete schedule',
+  // Rows of File › Version history (virtual-scrolled).
+  versionItem: '.revision-item',
+  versionName: 'input[aria-label="Revision name"], .revision-item-text-box',
+  versionAuthors: '.revision-item-collaborator-name',
+  currentVersion: '.current-version-label',
+  versionViewport: 'cdk-virtual-scroll-viewport',
+  restoreButton: 'Restore this version',
+  embedDialog: 'md-dialog:has(.embedding-dialog)',
+  embedEnable: 'Enable embedding',
+  embedNavigation: 'Show report navigation in embedded mode',
+} as const;
