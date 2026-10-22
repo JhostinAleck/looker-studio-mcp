@@ -405,6 +405,16 @@ export const CUSTOM_QUERY_OPTIONS = {
   consentDialog: 'Grant consent',
 } as const;
 
+// "Grant consent" over the whole report, for data sources with viewer's
+// credentials (and the viewer email parameter). Told apart from the community
+// visualization consent, which shares its title, by the body text.
+export const REPORT_CONSENT = {
+  dialog: 'mat-dialog-container, [role=dialog]',
+  text: /wants to use your information/i,
+  allow: 'Allow',
+  decline: 'Cancel',
+} as const;
+
 // ── Report check ──
 
 // How a component shows its state. Charts and controls have a header (texts,

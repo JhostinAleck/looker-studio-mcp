@@ -608,7 +608,7 @@ export type ChartProblemKind =
   | 'no_data' // the query returned no rows (often a filter or date range)
   | 'configuration' // the chart setup: invalid or missing fields
   | 'data_set' // the data source or its query: BigQuery errors, too many rows
-  | 'consent' // the viewer has not allowed the viewer email parameter
+  | 'consent' // the viewer has not allowed viewer's credentials or the viewer email parameter
   | 'loading' // still loading when the check gave up
   | 'error';
 
