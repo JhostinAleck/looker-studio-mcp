@@ -55,6 +55,7 @@ npm test             # vitest watch
 - The viewer clips pages taller than the window: `screenshot` grows the window through CDP first.
 - Text boxes ignore drags; move them with Shift+Arrow (1 px per press). A click on a selected text box enters text editing, so deselect first.
 - Date pickers (chart "Custom" range, date range control, comparison) open a popup with a preset menu button and Apply; presets like "Last 28 days" sit in a submenu named after its first entry ("Last 7 days").
+- The chart date range's "Custom" radio shows a tooltip to its right while hovered that stays over the picker button: move the mouse away before clicking the picker. Page and report settings only show "Default date range" once they have a date range dimension; custom queries with `@DS_START_DATE`/`@DS_END_DATE` have no date field but follow the page/report/control range.
 - Filters: Setup › Add filter lists the report's filters by name, then "Create a filter": name, Include/Exclude, field picker, condition `mat-select`, value box, Save. Each clause is a `.ng2-filter-expression-definition` with its own × button; the AND/OR buttons add the next clause last.
 - Filter values: with "Show suggested values while typing" on, "Equal to" and "In" take chips that only accept a suggested value (none while the data loads) and Save stays disabled. Turn it off: the box then takes free text, "In" comma separated.
 - `mat-select` labels intercept clicks: click with `force`. Option lists differ in case ("GREATER THAN" in conditional formatting): match ignoring case and the "(>)" suffix.

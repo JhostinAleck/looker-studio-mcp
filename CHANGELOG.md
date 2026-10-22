@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix: a chart's `date_range` failed with "the date picker did not open" whenever the Custom radio had to be turned on: its tooltip covered the picker. `set_page_settings` now explains that a default date range needs a date range dimension first (a custom query with date range parameters has no date field, but follows the page or report range).
 - `update_data_source` dry-runs a new `sql` in `project_id` (or the config's project) before opening the editor; `copy_report` dry-runs custom query replacements and refuses non-BigQuery ones.
 - New tool `add_community_viz`: community visualizations from the gallery by name or from a gs:// manifest, with the consent prompt accepted and data source, dimensions, metrics and Setup slots set like a chart.
 - `create_report`, `add_data_source` and `build_report_link` take `connector`: Google Sheets (spreadsheet URL or id, worksheet, header/hidden-cells options, range; Linking API by worksheet gid) and PostgreSQL/MySQL (host, port, database, user, password, SSL, table or custom query; not verified end to end). BigQuery stays the default; passwords are redacted from the audit log.
