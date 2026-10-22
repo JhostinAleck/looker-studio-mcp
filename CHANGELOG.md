@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Custom queries take `date_range_params` (`@DS_START_DATE`, `@DS_END_DATE`) and `viewer_email_param` (`@DS_USER_EMAIL`); the viewer email consent is given for the signed-in account. `build_report_link` refuses them: the Linking API has no parameter for them.
+- `create_report`, `add_data_source` and `build_report_link` dry-run a custom query in BigQuery first and return BigQuery's error without opening the browser; only a single SELECT is accepted.
 - `create_report`, `add_data_source` and `build_report_link` take a custom query: `sql` instead of `dataset_id` and `table_id`, with `project_id` as the billing project. `source_name` names the data source; without it Looker Studio names it after the first table in the query.
 - Filters take several clauses (`clauses`: AND groups of OR clauses). Filter values are typed with the editor's suggestions off: with them on, a typed value that the editor could not suggest was dropped and the filter was saved empty.
 - `date_range` takes fixed dates (`2026-10-01..2026-10-15`).

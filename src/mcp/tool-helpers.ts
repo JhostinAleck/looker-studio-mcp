@@ -39,7 +39,7 @@ export class MissingProjectError extends DomainError {
 export class InvalidSourceError extends DomainError {
   readonly code = 'INVALID_SOURCE';
   readonly userMessage =
-    'Give a data source as either sql (custom query) or dataset_id and table_id, not both.';
+    'Give a data source as either sql (custom query) or dataset_id and table_id, not both. source_name, date_range_params and viewer_email_param only go with sql.';
 }
 
 interface SourceInput {
@@ -48,6 +48,8 @@ interface SourceInput {
   table_id?: string | undefined;
   sql?: string | undefined;
   source_name?: string | undefined;
+  date_range_params?: boolean | undefined;
+  viewer_email_param?: boolean | undefined;
 }
 
 // Turns the tool fields into a table or custom query source.
@@ -59,9 +61,22 @@ export function resolveSource(
   const sql = input.sql?.trim();
   if (sql) {
     if (input.dataset_id || input.table_id) throw new InvalidSourceError();
-    return { projectId, sql, ...(input.source_name ? { name: input.source_name } : {}) };
+    return {
+      projectId,
+      sql,
+      ...(input.source_name ? { name: input.source_name } : {}),
+      ...(input.date_range_params ? { dateRangeParams: true } : {}),
+      ...(input.viewer_email_param ? { viewerEmailParam: true } : {}),
+    };
   }
-  if (!input.dataset_id || !input.table_id || input.source_name) throw new InvalidSourceError();
+  if (
+    !input.dataset_id ||
+    !input.table_id ||
+    input.source_name ||
+    input.date_range_params ||
+    input.viewer_email_param
+  )
+    throw new InvalidSourceError();
   return { projectId, datasetId: input.dataset_id, tableId: input.table_id };
 }
 

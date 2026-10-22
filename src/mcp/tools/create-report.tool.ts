@@ -10,14 +10,16 @@ import {
 } from '@/mcp/tool-helpers.js';
 
 import type { ReportToolDeps } from './reports-deps.js';
+import { checkQuerySource, type SourceCheckDeps } from './source-check.js';
 
 export async function handleCreateReport(
-  deps: ReportToolDeps & WriteDeps,
+  deps: ReportToolDeps & SourceCheckDeps & WriteDeps,
   raw: unknown,
 ): Promise<ToolResult> {
   const input = createReportSchema.parse(raw);
   const source = resolveSource(deps.defaultProject, input);
   const table = describeSource(source);
+  await checkQuerySource(deps, source);
   return runWrite(
     deps,
     'create_report',

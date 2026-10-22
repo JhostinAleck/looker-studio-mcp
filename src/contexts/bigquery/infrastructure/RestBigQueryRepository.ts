@@ -163,6 +163,7 @@ export class RestBigQueryRepository implements BigQueryRepository {
         maximumBytesBilled: String(request.maxBytesBilled),
         timeoutMs: 30_000,
         dryRun: request.dryRun ?? false,
+        ...(request.parameters ? namedParameters(request.parameters) : {}),
       },
     );
     // Long queries come back incomplete; poll the job until it finishes.
@@ -198,4 +199,15 @@ export class RestBigQueryRepository implements BigQueryRepository {
       `${BASE}/projects/${enc(ref.projectId)}/datasets/${enc(ref.datasetId)}/tables/${enc(ref.tableId)}`,
     );
   }
+}
+
+function namedParameters(parameters: Record<string, string>) {
+  return {
+    parameterMode: 'NAMED',
+    queryParameters: Object.entries(parameters).map(([name, value]) => ({
+      name,
+      parameterType: { type: 'STRING' },
+      parameterValue: { value },
+    })),
+  };
 }

@@ -355,6 +355,18 @@ const sourceShape = {
     .min(1)
     .optional()
     .describe('Name of the custom query data source in the report (only with sql)'),
+  date_range_params: z
+    .boolean()
+    .optional()
+    .describe(
+      'Only with sql: enable date range parameters, so the query can use @DS_START_DATE and @DS_END_DATE (YYYYMMDD strings)',
+    ),
+  viewer_email_param: z
+    .boolean()
+    .optional()
+    .describe(
+      'Only with sql: enable the viewer email address parameter, so the query can use @DS_USER_EMAIL',
+    ),
 };
 
 export const createReportSchema = z.object({

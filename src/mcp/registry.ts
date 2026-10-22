@@ -174,7 +174,7 @@ const TOOLS: ToolDef[] = [
     name: 'create_report',
     title: 'Create a report',
     description:
-      'Create a Looker Studio report connected to a BigQuery table or view, or to a custom query: pass sql (and optionally source_name) instead of dataset_id and table_id.',
+      'Create a Looker Studio report connected to a BigQuery table or view, or to a custom query: pass sql (and optionally source_name) instead of dataset_id and table_id.\nThe SQL is dry-run in BigQuery first; date_range_params and viewer_email_param pass @DS_START_DATE/@DS_END_DATE and @DS_USER_EMAIL to it.',
     schema: schemas.createReportSchema,
     write: true,
     run: handleCreateReport,
@@ -183,7 +183,7 @@ const TOOLS: ToolDef[] = [
     name: 'add_data_source',
     title: 'Add a data source',
     description:
-      'Connect another BigQuery table or view to an existing report, or a custom query: pass sql instead of dataset_id and table_id. project_id is then the billing project; source_name names the data source (Looker Studio otherwise names it after the first table in the query).',
+      'Connect another BigQuery table or view to an existing report, or a custom query: pass sql instead of dataset_id and table_id. project_id is then the billing project; source_name names the data source (Looker Studio otherwise names it after the first table in the query).\nThe SQL is dry-run in BigQuery first; date_range_params and viewer_email_param pass @DS_START_DATE/@DS_END_DATE and @DS_USER_EMAIL to it.',
     schema: schemas.addDataSourceSchema,
     write: true,
     run: handleAddDataSource,

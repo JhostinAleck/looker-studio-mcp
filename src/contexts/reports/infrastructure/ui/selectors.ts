@@ -348,3 +348,13 @@ export const SEL = {
 export function cssEscape(value: string): string {
   return value.replace(/["\\]/g, '\\$&');
 }
+
+// ── Custom query parameters ──
+
+// Checkboxes under the SQL box of the BigQuery connector's CUSTOM QUERY tab.
+export const CUSTOM_QUERY_OPTIONS = {
+  dateRangeParams: 'Enable date range parameters',
+  viewerEmailParam: 'Enable viewer email address parameter',
+  // Dialog the viewer email option opens; its Allow button turns the option on.
+  consentDialog: 'Grant consent',
+} as const;

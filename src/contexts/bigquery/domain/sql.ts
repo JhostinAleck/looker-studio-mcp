@@ -16,6 +16,20 @@ export class WriteQueryRejectedError extends DomainError {
     'run_query only accepts a single SELECT (or WITH ... SELECT) statement. Use create_view to save SQL.';
 }
 
+// A custom query data source that BigQuery would refuse, caught before the
+// Looker Studio connector shows it as an opaque dialog error.
+export class SourceQueryRejectedError extends DomainError {
+  readonly code = 'SOURCE_QUERY_REJECTED';
+  readonly userMessage: string;
+
+  constructor(detail?: string) {
+    super(detail ?? 'custom query is not a single SELECT');
+    this.userMessage = detail
+      ? `BigQuery rejected the custom query: ${detail}`
+      : 'A custom query data source must be a single SELECT (or WITH ... SELECT) statement.';
+  }
+}
+
 const PROJECT_RE = /^[a-z][a-z0-9-]{4,61}[a-z0-9]$/;
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,1023}$/;
 

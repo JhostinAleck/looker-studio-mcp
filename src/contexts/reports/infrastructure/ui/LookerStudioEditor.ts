@@ -1,6 +1,7 @@
 import type { Locator, Page } from 'playwright';
 
 import type {
+  BigQueryQuerySource,
   BigQuerySource,
   ButtonSpec,
   ConditionalFormat,
@@ -22,6 +23,7 @@ type FilterClauseInput = FilterClause;
 import { InfrastructureError } from '@/shared-kernel/errors/InfrastructureError.js';
 
 import { BASE, HL, SECTION, SEL, cssEscape, datePresetPath, escapeRegExp } from './selectors.js';
+import { CUSTOM_QUERY_OPTIONS } from './selectors.js';
 
 export class EditorStepError extends InfrastructureError {
   readonly code = 'LOOKER_STUDIO_EDITOR';
@@ -490,6 +492,7 @@ export class LookerStudioEditor {
         .click({ timeout: this.timeoutMs });
       if (isQuerySource(source)) {
         await this.fillCustomQuery(source.projectId, source.sql);
+        await this.setCustomQueryOptions(source);
       } else {
         await this.pickTable(source.projectId, source.datasetId, source.tableId);
       }
@@ -501,6 +504,7 @@ export class LookerStudioEditor {
         .locator(SEL.dataPanelChip('Record Count'))
         .first()
         .waitFor({ timeout: this.timeoutMs });
+      if (isQuerySource(source) && source.viewerEmailParam) await this.acceptReportConsent();
     });
     await this.settle();
   }
@@ -535,6 +539,59 @@ export class LookerStudioEditor {
     await editor.evaluate((e, text) => {
       (e as HTMLElement & { CodeMirror: { setValue(v: string): void } }).CodeMirror.setValue(text);
     }, sql);
+  }
+
+  // ── Custom query parameters ──
+
+  // Ticks "Enable date range parameters" / "Enable viewer email address
+  // parameter" under the SQL box; the connector then passes @DS_START_DATE,
+  // @DS_END_DATE and @DS_USER_EMAIL to the query.
+  private async setCustomQueryOptions(source: BigQueryQuerySource): Promise<void> {
+    for (const key of ['dateRangeParams', 'viewerEmailParam'] as const) {
+      if (!source[key]) continue;
+      const box = this.page
+        .locator('mat-checkbox')
+        .filter({ hasText: CUSTOM_QUERY_OPTIONS[key] })
+        .first();
+      await box.waitFor({ timeout: this.timeoutMs });
+      const input = box.locator('input[type=checkbox]');
+      if (!(await input.isChecked())) {
+        await box.locator('label').click();
+        // The viewer email asks the signed-in account for consent first.
+        const consent = this.page.locator('mat-dialog-container', {
+          hasText: CUSTOM_QUERY_OPTIONS.consentDialog,
+        });
+        if (
+          await consent.waitFor({ timeout: 3_000 }).then(
+            () => true,
+            () => false,
+          )
+        ) {
+          await consent.getByRole('button', { name: 'Allow', exact: true }).click();
+          await consent.waitFor({ state: 'hidden', timeout: this.timeoutMs });
+        }
+      }
+      if (!(await input.isChecked()))
+        throw new Error(`"${CUSTOM_QUERY_OPTIONS[key]}" did not turn on`);
+    }
+  }
+
+  // A report with a viewer email source asks each viewer once for consent
+  // before its charts load; the account that adds the source gives it here so
+  // the editor is not blocked on the next visits.
+  private async acceptReportConsent(): Promise<void> {
+    const consent = this.page.locator('mat-dialog-container', {
+      hasText: CUSTOM_QUERY_OPTIONS.consentDialog,
+    });
+    if (
+      !(await consent.waitFor({ timeout: 15_000 }).then(
+        () => true,
+        () => false,
+      ))
+    )
+      return;
+    await consent.getByRole('button', { name: 'Allow', exact: true }).click();
+    await consent.waitFor({ state: 'hidden', timeout: this.timeoutMs });
   }
 
   // Picks the data source in the Setup panel when the report has several: the

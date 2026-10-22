@@ -54,6 +54,8 @@ export interface QueryRequest {
   maxBytesBilled: number;
   // Validates the query and estimates bytes without running it.
   dryRun?: boolean;
+  // Named STRING query parameters (@name in the SQL).
+  parameters?: Record<string, string>;
 }
 
 export interface ViewRequest extends TableRef {

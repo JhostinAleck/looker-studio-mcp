@@ -10,14 +10,16 @@ import {
 } from '@/mcp/tool-helpers.js';
 
 import type { ReportToolDeps } from './reports-deps.js';
+import { checkQuerySource, type SourceCheckDeps } from './source-check.js';
 
 export async function handleAddDataSource(
-  deps: ReportToolDeps & WriteDeps,
+  deps: ReportToolDeps & SourceCheckDeps & WriteDeps,
   raw: unknown,
 ): Promise<ToolResult> {
   const input = addDataSourceSchema.parse(raw);
   const source = resolveSource(deps.defaultProject, input);
   const table = describeSource(source);
+  await checkQuerySource(deps, source);
   return runWrite(deps, 'add_data_source', { ...input }, `add ${table} to the report`, async () => {
     await addDataSource(deps.reportRepo, input.report_id, source);
     return text(`Data source \`${table}\` added to the report.`);

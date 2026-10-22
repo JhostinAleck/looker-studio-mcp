@@ -131,7 +131,7 @@ Settings are addressed by the **label the properties panel shows** (`"Bar color"
 
 ## Custom queries
 
-`create_report`, `add_data_source` and `build_report_link` take `sql` instead of `dataset_id` and `table_id`; `project_id` is then the billing project and `source_name` names the data source. The data source then works like any other. See [docs/custom-queries.md](docs/custom-queries.md) for naming, field types, validation and cost.
+`create_report`, `add_data_source` and `build_report_link` take `sql` instead of `dataset_id` and `table_id`; `project_id` is then the billing project and `source_name` names the data source. The SQL is dry-run in BigQuery first: a query BigQuery rejects comes back with BigQuery's message and the browser never opens. `date_range_params` and `viewer_email_param` pass `@DS_START_DATE`/`@DS_END_DATE` and `@DS_USER_EMAIL` to the query (not through the Linking API). The data source then works like any other. See [docs/custom-queries.md](docs/custom-queries.md) for naming, field types, validation and cost.
 
 ## Designing dashboards
 
@@ -161,7 +161,8 @@ See [docs/design-guide.md](docs/design-guide.md) for the canvas grid, the card p
 - `add_page` appends after the last page.
 - `manage_filter` edit rewrites every clause of the filter; charts that use it keep it.
 - Filter values are typed as free text (the editor's value suggestions are turned off), so a value that is not in the data is accepted: check the spelling. "In" takes its values comma separated.
-- Custom queries: always pass `source_name`, cast columns whose type Looker Studio may guess wrong, and dry-run the SQL first ([details](docs/custom-queries.md)).
+- Custom queries: always pass `source_name` and cast columns whose type Looker Studio may guess wrong. The automatic dry run catches unknown columns and syntax errors, not errors that only happen when the query runs ([details](docs/custom-queries.md)).
+- `build_report_link` cannot enable date range or viewer email parameters: the Linking API has no parameter for them.
 - Community visualizations are not covered: they need a third-party component URL and its own permission prompt.
 - `share_report` opens a visible Chrome window for a few seconds: Google refuses invitations sent from a headless browser. It sends one invitation per address, since a batch fails with "An unknown error occurred".
 

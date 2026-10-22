@@ -6,7 +6,9 @@ import type {
   TableRef,
   TableSummary,
 } from '@/contexts/bigquery/domain/BigQuery.js';
+import { GoogleApiError } from '@/contexts/google-api/domain/GoogleApiError.js';
 import {
+  SourceQueryRejectedError,
   WriteQueryRejectedError,
   assertName,
   assertProjectId,
@@ -44,7 +46,13 @@ export async function describeTable(repo: BigQueryRepository, ref: TableRef): Pr
 
 export async function runQuery(
   repo: BigQueryRepository,
-  input: { projectId: string; sql: string; maxRows?: number; dryRun?: boolean },
+  input: {
+    projectId: string;
+    sql: string;
+    maxRows?: number;
+    dryRun?: boolean;
+    parameters?: Record<string, string>;
+  },
   limits: QueryLimits,
 ): Promise<QueryResult> {
   if (!isReadOnlyQuery(input.sql)) throw new WriteQueryRejectedError();
@@ -55,7 +63,27 @@ export async function runQuery(
     maxRows: Math.min(input.maxRows ?? limits.maxRows, limits.maxRows),
     maxBytesBilled: limits.maxBytesBilled,
     ...(input.dryRun ? { dryRun: true } : {}),
+    ...(input.parameters ? { parameters: input.parameters } : {}),
   });
+}
+
+// Dry-runs the SQL of a custom query data source, so BigQuery's own message
+// (an unknown column, a missing table) comes back before the browser opens.
+// `parameters` stand in for the values Looker Studio passes (@DS_START_DATE…).
+export async function checkSourceQuery(
+  repo: BigQueryRepository,
+  input: { projectId: string; sql: string; parameters?: Record<string, string> },
+  limits: QueryLimits,
+): Promise<{ bytesProcessed: number }> {
+  if (!isReadOnlyQuery(input.sql)) throw new SourceQueryRejectedError();
+  try {
+    const result = await runQuery(repo, { ...input, dryRun: true }, limits);
+    return { bytesProcessed: result.bytesProcessed };
+  } catch (err) {
+    if (err instanceof GoogleApiError && err.status === 400)
+      throw new SourceQueryRejectedError(err.message);
+    throw err;
+  }
 }
 
 // Checks the view's SELECT with a dry run first, so a broken view is never saved.
