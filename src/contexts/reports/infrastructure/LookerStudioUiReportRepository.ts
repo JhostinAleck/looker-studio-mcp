@@ -384,11 +384,14 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       // dragged sideways: let it stretch while resizing, then restore it.
       const resizing = layout.width !== undefined || layout.height !== undefined;
       const image = resizing && /^Image/.test(await editor.select(index));
+      // The switch is on the Setup tab; a Style setting may have left the panel on Style.
+      if (image) await editor.openTab('Setup');
       const aspect = image ? await editor.toggleState('Preserve Aspect Ratio') : null;
       if (aspect) await editor.applySettings({ 'Preserve Aspect Ratio': false });
       final = await editor.applyLayout(index, layout);
       if (aspect) {
         await editor.select(index);
+        await editor.openTab('Setup');
         await editor.applySettings({ 'Preserve Aspect Ratio': true });
       }
       // Looker Studio snaps some sizes (and keeps shapes inside the canvas); say so.
@@ -1152,6 +1155,8 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       await editor.settle(800);
       const heading = scope === 'page' ? 'Current Page Settings' : 'Report Settings';
       const tag = await this.scopeFor(editor, heading, `${scope}-settings`);
+      // The panel reopens on the tab it was left on.
+      await this.scopeTab(editor, tag, 'Setup');
       const warnings: string[] = [];
       if (settings.dataSource) {
         await editor.step(`choose data source ${settings.dataSource}`, async () => {
@@ -1495,11 +1500,13 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         }
         await save.click();
         await editor.settle(2000);
-        await page
-          .getByRole('button', { name: /close/i })
-          .first()
-          .click({ timeout: 5_000 })
-          .catch(() => undefined);
+        // Saving goes back to the list of blends, which covers the menu bar: close both.
+        for (let i = 0; i < 2; i++) {
+          const close = page.getByRole('button', { name: /^close$/i }).first();
+          if (!(await close.isVisible().catch(() => false))) break;
+          await close.click({ timeout: 5_000 }).catch(() => undefined);
+          await editor.settle(1000);
+        }
       });
     });
   }
@@ -1744,6 +1751,18 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   }
 
   // Tags the panel that holds `heading`, so settings only touch that panel.
+  // Page settings have Setup and Style tabs; report settings have none.
+  private async scopeTab(
+    editor: LookerStudioEditor,
+    tag: string,
+    tab: 'Setup' | 'Style',
+  ): Promise<void> {
+    const el = editor.page.locator(`${tag} [role=tab]`, { hasText: tab }).first();
+    if (!(await el.count()) || (await el.getAttribute('aria-selected')) === 'true') return;
+    await el.click();
+    await editor.settle(500);
+  }
+
   private async scopeFor(
     editor: LookerStudioEditor,
     heading: string,
@@ -2975,7 +2994,8 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       const name = await editor.reportName();
       const g = await editor.geometry();
       const theme = await this.readThemeName(editor);
-      const dataSources = await this.readDataSources(editor, reportId);
+      // The Data sources panel lists the newest first: a spec adds them in its order.
+      const dataSources = (await this.readDataSources(editor, reportId)).reverse();
       const notes: string[] = [];
       // Each part is read on its own: one that fails is noted, the rest still comes back.
       const part = async <T>(what: string, read: () => Promise<T>): Promise<T | undefined> => {
@@ -3466,6 +3486,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     await editor.settle(800);
     const heading = scope === 'page' ? 'Current Page Settings' : 'Report Settings';
     const tag = await this.scopeFor(editor, heading, `${scope}-settings`);
+    await this.scopeTab(editor, tag, 'Setup');
     const data = await editor.readSetupData(tag);
     const style: StyleSettings = {};
     if (scope === 'page') {

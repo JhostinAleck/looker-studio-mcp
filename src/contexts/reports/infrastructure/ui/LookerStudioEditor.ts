@@ -1539,11 +1539,14 @@ export class LookerStudioEditor {
         missing.push(`reference line #${k}`);
         continue;
       }
+      // A new line takes the right axis once a series is on it: set the left one explicitly
+      // (only charts with two axes have the setting, so its absence is no warning by default).
+      const axis = await this.applySettings({ 'Line axis': line.axis ?? 'Left Y-axis' }, scope);
+      if (line.axis) missing.push(...axis);
       missing.push(
         ...(await this.applySettings(
           {
             ...(line.type ? { 'Line type': line.type } : {}),
-            ...(line.axis ? { 'Line axis': line.axis } : {}),
             ...(line.value !== undefined ? { 'Line value': line.value } : {}),
             ...(line.label ? { 'Show label': true, 'Line label': line.label } : {}),
             ...(line.color ? { 'Line color': line.color } : {}),
@@ -1561,6 +1564,7 @@ export class LookerStudioEditor {
         missing.push(`reference band #${k}`);
         continue;
       }
+      await this.applySettings({ 'Band axis': 'Left Y-axis' }, scope);
       missing.push(
         ...(await this.applySettings(
           {
@@ -1597,11 +1601,20 @@ export class LookerStudioEditor {
       });
       await sleep(600);
       // Its own Descending/Ascending: the numbered radios of the panel are not in sort order.
-      const scope = await this.tagSection(`Sort #${k}`);
+      // The new sort is the highest "Sort #n": a lone first sort has no number, so adding
+      // the second one numbers both (#1, #2) and the count taken before is one short.
+      const numbers = (await panel.getByText(/^Sort #\d+$/).allTextContents()).map((t) =>
+        Number(t.replace(/\D+/g, '')),
+      );
+      const scope = numbers.length ? await this.tagSection(`Sort #${Math.max(...numbers)}`) : null;
+      if (!scope) {
+        missing.push(`the direction of sort #${k}`);
+        continue;
+      }
       missing.push(
         ...(await this.applySettings(
           { [sort.ascending ? 'Ascending' : 'Descending']: true },
-          scope ?? SEL.propertiesPanel,
+          scope,
         )),
       );
     }
@@ -1817,6 +1830,8 @@ export class LookerStudioEditor {
         (await this.setupSlots()).find(
           (s) => s.kind === 'chip' && s.field === name && !/^Sort/.test(s.section),
         );
+      // Scrolled away (after sorts or filters), a chip's box is off screen: bring dimensions back first.
+      await this.revealSection(SECTION.dimensions);
       let chip = await find();
       if (!chip) {
         for (const section of [SECTION.dimensions, SECTION.metrics, SECTION.breakdown]) {
