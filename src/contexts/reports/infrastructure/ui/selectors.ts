@@ -438,6 +438,11 @@ export const CHECK = {
   // and an error id.
   errorDialog: 'md-dialog.errorDialog',
   dialogParts: 'p.errorMessage, .error-code-block, .error-id p',
+  // Vega charts (bar, column, line, area…) draw in an iframe and show empty
+  // axes, not "No data", for no rows. Their root group appears once drawn; the
+  // hover target marks hold one item per data point.
+  vegaRoot: '.role-frame.root',
+  vegaPoints: '.role-mark.hoverTarget',
 } as const;
 
 // ── data sources ──
