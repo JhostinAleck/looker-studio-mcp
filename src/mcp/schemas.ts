@@ -469,6 +469,10 @@ export const addChartSchema = z.object({
     .describe('Sort field; pivots sort their first row dimension by it'),
   sort_ascending: z.boolean().default(false),
   title: z.string().optional(),
+  labels: z
+    .record(z.string(), z.string().min(1))
+    .optional()
+    .describe('Display names of dimensions by field name, e.g. {"feature_label":"Feature"}'),
   layout: layout.optional(),
   style: settings.optional().describe('Style tab settings applied after the chart is placed'),
   page,
@@ -501,7 +505,9 @@ export const addImageSchema = z.object({
   image: z
     .string()
     .min(1)
-    .describe('Local path or https URL of a .png/.jpg/.gif/.svg/.webp (logos, header art)'),
+    .describe(
+      'Local path of a .png/.jpg/.gif/.svg/.webp (uploaded), an https URL (Insert › Image › By URL) or a data:image/…;base64 URI',
+    ),
   alt_text: z.string().optional(),
   layout: layout.optional(),
   style: settings.optional().describe('e.g. {"Border radius":12,"Opacity":"80%"}'),
@@ -526,6 +532,9 @@ export const addTextSchema = z.object({
   font_size: z.number().int().min(6).max(400).optional(),
   color: color.optional(),
   bold: z.boolean().default(false),
+  italic: z.boolean().default(false),
+  underline: z.boolean().default(false),
+  strikethrough: z.boolean().default(false),
   background: color.optional(),
   align: z.enum(['left', 'center', 'right']).optional(),
   layout: layout.optional(),
@@ -964,6 +973,8 @@ export const specDataSourceSchema = z.object({
   sql: z.string().min(1).optional().describe('Custom query instead of dataset_id and table_id'),
 });
 
+const specScope = setPageSettingsSchema.omit({ report_id: true, scope: true, page: true });
+
 export const reportSpecSchema = z.object({
   version: z.literal(1).default(1),
   name: z.string().min(1).describe('Report name'),
@@ -975,11 +986,37 @@ export const reportSpecSchema = z.object({
     .array(specDataSourceSchema)
     .default([])
     .describe('The first one creates the report; the others are added'),
-  calculated_fields: z.array(addCalculatedFieldSchema.omit({ report_id: true })).optional(),
+  parameters: z
+    .array(addParameterSchema.omit({ report_id: true }))
+    .optional()
+    .describe('add_parameter arguments'),
+  calculated_fields: z
+    .array(addCalculatedFieldSchema.omit({ report_id: true }))
+    .optional()
+    .describe('add_calculated_field arguments, in the order of the data source editor'),
+  group_fields: z
+    .array(addGroupFieldSchema.omit({ report_id: true }))
+    .optional()
+    .describe('add_group_field arguments'),
+  bin_fields: z
+    .array(addBinFieldSchema.omit({ report_id: true }))
+    .optional()
+    .describe('add_bin_field arguments'),
+  blends: z
+    .array(createBlendSchema.omit({ report_id: true }))
+    .optional()
+    .describe('create_blend arguments; charts name a blend as their data_source'),
+  report_settings: specScope
+    .omit({ style: true })
+    .optional()
+    .describe('set_page_settings arguments for the whole report (File › Report settings)'),
   pages: z
     .array(
       z.object({
         name: z.string().min(1),
+        settings: specScope
+          .optional()
+          .describe('set_page_settings arguments of this page (Page › Current page settings)'),
         components: z
           .array(specComponentSchema)
           .default([])
@@ -997,10 +1034,22 @@ export const exportReportSpecSchema = z.object({
     .describe(
       'Style settings kept per component: none, main (background, border, legend, data labels) or all',
     ),
+  path: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Write the spec to this .json file, and uploaded images next to it (<name>-images/). Without it images up to 512 KB are embedded as data: URIs.',
+    ),
 });
 
 export const applyReportSpecSchema = z.object({
-  spec: reportSpecSchema.describe('A report spec, as export_report_spec returns it'),
+  spec: reportSpecSchema.optional().describe('A report spec, as export_report_spec returns it'),
+  spec_path: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Instead of spec: a spec file; its image paths are relative to it'),
   report_id: reportId
     .optional()
     .describe('Update this report (add missing pages and components) instead of creating one'),

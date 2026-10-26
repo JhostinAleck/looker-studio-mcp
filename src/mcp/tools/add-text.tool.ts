@@ -13,6 +13,9 @@ export async function handleAddText(
   const spec = {
     text: input.text,
     bold: input.bold,
+    ...(input.italic ? { italic: true } : {}),
+    ...(input.underline ? { underline: true } : {}),
+    ...(input.strikethrough ? { strikethrough: true } : {}),
     ...(input.font_size ? { fontSize: input.font_size } : {}),
     ...(input.color ? { color: input.color } : {}),
     ...(input.background ? { background: input.background } : {}),

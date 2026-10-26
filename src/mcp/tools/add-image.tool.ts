@@ -9,14 +9,22 @@ import { runWrite, text, type ToolResult, type WriteDeps } from '@/mcp/tool-help
 import { placedMessage, toLayout } from './component-format.js';
 import type { ReportToolDeps } from './reports-deps.js';
 
-// The editor only uploads files: an https image is downloaded to a temp folder first.
-async function localCopy(image: string): Promise<string> {
-  if (!/^https:\/\//i.test(image)) return image;
-  const res = await fetch(image);
-  if (!res.ok) throw new Error(`Could not download ${image}: HTTP ${res.status}`);
-  const name = basename(new URL(image).pathname) || 'image.png';
-  const path = join(mkdtempSync(join(tmpdir(), 'looker-image-')), name);
-  writeFileSync(path, Buffer.from(await res.arrayBuffer()));
+const EXTENSION: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/svg+xml': 'svg',
+  'image/webp': 'webp',
+};
+
+// A data: URI (as export_report_spec embeds small images) becomes a temp file to upload.
+function localCopy(image: string): string {
+  const data = /^data:(image\/[\w+.-]+);base64,(.*)$/s.exec(image);
+  if (!data) return image;
+  const ext = EXTENSION[data[1]!.toLowerCase()];
+  if (!ext) throw new Error(`Images of type ${data[1]} cannot be uploaded.`);
+  const path = join(mkdtempSync(join(tmpdir(), 'looker-image-')), `image.${ext}`);
+  writeFileSync(path, Buffer.from(data[2]!, 'base64'));
   return path;
 }
 
@@ -25,13 +33,18 @@ export async function handleAddImage(
   raw: unknown,
 ): Promise<ToolResult> {
   const input = addImageSchema.parse(raw);
-  const what = `the image ${basename(input.image)}`;
+  const byUrl = /^https:\/\//i.test(input.image);
+  const what = `the image ${input.image.startsWith('data:') ? '(embedded)' : basename(input.image)}`;
   return runWrite(deps, 'add_image', { ...input }, `add ${what}`, async () => {
-    const path = await localCopy(input.image);
+    const path = byUrl ? input.image : localCopy(input.image);
     const placed = await addImage(
       deps.reportRepo,
       input.report_id,
-      { path, ...(input.alt_text ? { altText: input.alt_text } : {}) },
+      {
+        path,
+        ...(byUrl ? { byUrl: true } : {}),
+        ...(input.alt_text ? { altText: input.alt_text } : {}),
+      },
       {
         ...(input.layout ? { layout: toLayout(input.layout) } : {}),
         ...(input.style ? { style: input.style } : {}),

@@ -1,15 +1,25 @@
+import { readFileSync } from 'node:fs';
+import { dirname, isAbsolute, resolve } from 'node:path';
+
 import {
   createReport,
   inOneVisit,
   listComponents,
   dataSourceNames,
+  fieldNames,
   listPages,
 } from '@/contexts/reports/application/reportUseCases.js';
 import { parseReportId, reportUrl } from '@/contexts/reports/domain/Report.js';
-import { type SpecTarget, dataSourceName, specToActions } from '@/mcp/report-spec.js';
-import { applyReportSpecSchema } from '@/mcp/schemas.js';
+import {
+  type ReportSpec,
+  type SpecTarget,
+  dataSourceName,
+  specToActions,
+} from '@/mcp/report-spec.js';
+import { applyReportSpecSchema, reportSpecSchema } from '@/mcp/schemas.js';
 import { resolveSource, runWrite, text, type ToolResult } from '@/mcp/tool-helpers.js';
 import { DomainError } from '@/shared-kernel/errors/DomainError.js';
+import { expandPath } from '@/shared-kernel/path/expandPath.js';
 
 import { type BatchDeps, checkActions, formatResults, runActions } from './batch-actions.js';
 
@@ -19,12 +29,53 @@ class NoFirstSourceError extends DomainError {
     'A new report needs a data source: the spec has no data_sources (pass report_id to update an existing report).';
 }
 
+class SpecInputError extends DomainError {
+  readonly code = 'SPEC_INPUT';
+  constructor(readonly userMessage: string) {
+    super(userMessage);
+  }
+}
+
 // Stands in for the report while the actions are checked, before it exists.
 const CHECK_ID = '00000000-0000-4000-8000-000000000000';
 
+// The spec, and the folder its relative image paths start from.
+function loadSpec(input: { spec?: ReportSpec | undefined; spec_path?: string | undefined }): {
+  spec: ReportSpec;
+  baseDir: string;
+} {
+  if (!!input.spec === !!input.spec_path)
+    throw new SpecInputError('Pass the spec as `spec` or as a file in `spec_path` (one of them).');
+  if (input.spec) return { spec: input.spec, baseDir: process.cwd() };
+  const path = resolve(expandPath(input.spec_path!));
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    throw new SpecInputError(`Could not read the spec file ${path}: ${(err as Error).message}`);
+  }
+  return { spec: reportSpecSchema.parse(raw), baseDir: dirname(path) };
+}
+
+// Image files exported next to a spec are named relative to it.
+function withImagePaths(spec: ReportSpec, baseDir: string): ReportSpec {
+  return {
+    ...spec,
+    pages: spec.pages.map((p) => ({
+      ...p,
+      components: p.components.map((c) =>
+        c.component === 'image' && !/^(https:|data:)/i.test(c.image) && !isAbsolute(c.image)
+          ? { ...c, image: resolve(baseDir, expandPath(c.image)) }
+          : c,
+      ),
+    })),
+  };
+}
+
 export async function handleApplyReportSpec(deps: BatchDeps, raw: unknown): Promise<ToolResult> {
   const input = applyReportSpecSchema.parse(raw);
-  const spec = input.spec;
+  const loaded = loadSpec(input);
+  const spec = withImagePaths(loaded.spec, loaded.baseDir);
   const name = input.name ?? spec.name;
   const existing = input.report_id ? parseReportId(input.report_id) : undefined;
   const first = spec.data_sources[0];
@@ -45,7 +96,9 @@ export async function handleApplyReportSpec(deps: BatchDeps, raw: unknown): Prom
   const what = existing
     ? `add the missing parts of spec "${spec.name}" to report ${existing}`
     : `create report "${name}" from a spec (${spec.pages.length} pages)`;
-  return runWrite(deps, 'apply_report_spec', { ...input }, what, async () => {
+  // The spec itself can carry images: the audit keeps its name.
+  const audited = { ...input, spec: `<spec "${spec.name}", ${spec.pages.length} pages>` };
+  return runWrite(deps, 'apply_report_spec', audited, what, async () => {
     const started = Date.now();
     const lines: string[] = [];
     let reportId = existing;
@@ -69,10 +122,13 @@ export async function handleApplyReportSpec(deps: BatchDeps, raw: unknown): Prom
           layouts.push(
             (await listComponents(deps.reportRepo, id, page.index)).map((c) => c.layout),
           );
+        const known = await fieldNames(deps.reportRepo, id);
         target = {
           pages: pages.map((p) => p.name),
           layouts,
           dataSources: await dataSourceNames(deps.reportRepo, id),
+          fields: known.fields,
+          blends: known.blends,
           fresh,
         };
       }

@@ -9,6 +9,7 @@ import type {
   ArrangeAction,
   BinFieldSpec,
   ComponentSnapshot,
+  DataSourceFields,
   DataSourceSnapshot,
   ReportSnapshot,
   StyleDepth,
@@ -80,6 +81,7 @@ import {
   type ReportSummary,
   type StyleSettings,
   cssColorToHex,
+  dateRangeFromLabel,
   describeSource,
   filterClauses,
   isQuerySource,
@@ -104,7 +106,9 @@ import {
   FIELD_AGGREGATION_LABEL,
   FRESHNESS_LABEL,
   FILTER_CONDITIONS,
+  EMBED_URL_LABEL,
   HL,
+  IMAGE_SEL,
   MAIN_STYLE,
   MAIN_STYLE_NEUTRAL,
   PAGE_MENU,
@@ -117,6 +121,7 @@ import {
   SHAPE_PATHS,
   SPEC_DETAILED_SECTIONS,
   SPEC_SKIPPED_SECTIONS,
+  conditionAlias,
   cssEscape,
   escapeRegExp,
   sectionNamed,
@@ -152,6 +157,17 @@ const DEFAULT_SIZE: Record<string, { width: number; height: number }> = {
   scorecard: { width: 220, height: 120 },
   text: { width: 400, height: 50 },
 };
+
+// What readReport carries from component to component.
+interface ReadContext {
+  depth: StyleDepth;
+  severalSources: boolean;
+  // Every filter of the report by name, with its clauses.
+  filters: Map<string, FilterSpec>;
+  // Dimension value colors belong to the report: read once, on the first chart that uses them.
+  valueColors: boolean;
+  notes: string[];
+}
 
 // An editor kept open by inOneVisit for the calls made inside it.
 interface EditorVisit {
@@ -478,6 +494,11 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       );
     }
 
+    // Display names last but before the data settings: chips are matched by
+    // name until here, conditional formats and series by display name after.
+    for (const [field, label] of Object.entries(chart.labels ?? {})) {
+      await editor.relabelField(field, label);
+    }
     warnings.push(...(await this.applyData(editor, { ...chart, fields: {} })));
 
     const style: StyleSettings = {
@@ -597,37 +618,42 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       // undo and drag again if the editor took the drag for a click.
       const size = { width: 200, height: 150 };
       let index: number;
-      for (let attempt = 1; ; attempt++) {
-        index = await editor.placeAt(
-          spot.x,
-          spot.y,
-          () => editor.clickMenu('Insert', ['Image']),
-          size,
-        );
-        const box = (await editor.layouts())[index]!;
-        if (box.width > 0 && box.height > 0) break;
-        await editor.undo();
-        if (attempt === 3) throw new EditorStepError('the image box could not be drawn');
+      if (image.byUrl) index = await this.insertImageByUrl(editor, image.path);
+      else {
+        for (let attempt = 1; ; attempt++) {
+          index = await editor.placeAt(
+            spot.x,
+            spot.y,
+            () => editor.clickMenu('Insert', ['Image']),
+            size,
+          );
+          const box = (await editor.layouts())[index]!;
+          if (box.width > 0 && box.height > 0) break;
+          await editor.undo();
+          if (attempt === 3) throw new EditorStepError('the image box could not be drawn');
+        }
       }
       await editor.select(index);
       await editor.openTab('Setup');
       const file = image.path.split(/[\\/]/).pop()!;
-      await editor.step(`upload ${file}`, async () => {
-        const chooser = editor.page.waitForEvent('filechooser', {
-          timeout: this.opts.stepTimeoutMs,
+      if (!image.byUrl) {
+        await editor.step(`upload ${file}`, async () => {
+          const chooser = editor.page.waitForEvent('filechooser', {
+            timeout: this.opts.stepTimeoutMs,
+          });
+          await editor.page
+            .locator(SEL.propertiesPanel)
+            .getByText('Select a file', { exact: true })
+            .first()
+            .click();
+          await (await chooser).setFiles(image.path);
+          await editor.page
+            .locator(SEL.propertiesPanel)
+            .getByText(file, { exact: true })
+            .first()
+            .waitFor({ timeout: this.opts.stepTimeoutMs });
         });
-        await editor.page
-          .locator(SEL.propertiesPanel)
-          .getByText('Select a file', { exact: true })
-          .first()
-          .click();
-        await (await chooser).setFiles(image.path);
-        await editor.page
-          .locator(SEL.propertiesPanel)
-          .getByText(file, { exact: true })
-          .first()
-          .waitFor({ timeout: this.opts.stepTimeoutMs });
-      });
+      }
       await editor.settle(1500);
       const warnings = image.altText
         ? await editor.applySettings({ 'Alt text': image.altText })
@@ -638,6 +664,35 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       }
       return this.finish(editor, index, opts.layout, warnings);
     });
+  }
+
+  // The image comes in by itself (250x250 in the middle of the page), selected.
+  private async insertImageByUrl(editor: LookerStudioEditor, url: string): Promise<number> {
+    const page = editor.page;
+    const before = (await editor.layouts()).length;
+    await editor.step(`insert the image ${url}`, async () => {
+      await editor.walkMenu(
+        () => page.locator(IMAGE_SEL.toolbarMenu).first().click(),
+        [IMAGE_SEL.byUrl],
+      );
+      const dialog = page.locator('mat-dialog-container', { hasText: IMAGE_SEL.urlDialog });
+      await dialog.waitFor({ timeout: this.opts.stepTimeoutMs });
+      await dialog.locator('input').first().fill(url);
+      await dialog.getByRole('button', { name: IMAGE_SEL.insert, exact: true }).click();
+      await dialog.waitFor({ state: 'hidden', timeout: this.opts.stepTimeoutMs });
+      await page
+        .waitForFunction(
+          ({ sel, n }) => document.querySelectorAll(sel).length > n,
+          { sel: `${SEL.canvas} ${SEL.component}`, n: before },
+          { timeout: this.opts.stepTimeoutMs },
+        )
+        .catch(() => {
+          throw new Error('Looker Studio could not load the image from that URL');
+        });
+    });
+    await editor.settle(1500);
+    await editor.deselect();
+    return (await editor.layouts()).length - 1;
   }
 
   async addCalculatedField(
@@ -686,12 +741,15 @@ export class LookerStudioUiReportRepository implements ReportRepository {
           .click({ timeout: this.opts.stepTimeoutMs });
         await editor.settle(800);
       });
+      await this.closeSourcesPanel(editor);
     });
   }
 
   // Resource › Manage added data sources › Edit, for `name` or the only source.
   private async openSourceEditor(editor: LookerStudioEditor, name?: string): Promise<void> {
     const page = editor.page;
+    // The last action of a batch can leave the Data sources panel open over the menu bar.
+    await this.closeSourcesPanel(editor);
     await editor.clickMenu('Resource', ['Manage added data sources']);
     await this.waitForSourceRows(editor);
     const sources = await this.listedSources(editor);
@@ -840,12 +898,19 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         ...opts.style,
       };
       warnings.push(...(await editor.applySettings(settings)));
-      if (text.bold) {
-        const bold = editor.page
-          .locator(`${SEL.propertiesPanel} ${SEL.iconButton('format_bold')}`)
+      // The format buttons apply to the whole box while it is selected, not edited.
+      for (const [on, icon, name] of [
+        [text.bold, 'format_bold', 'bold'],
+        [text.italic, 'format_italic', 'italic'],
+        [text.underline, 'format_underlined', 'underline'],
+        [text.strikethrough, 'format_strikethrough', 'strikethrough'],
+      ] as const) {
+        if (!on) continue;
+        const button = editor.page
+          .locator(`${SEL.propertiesPanel} ${SEL.iconButton(icon)}`)
           .first();
-        if (await bold.count()) await bold.click();
-        else warnings.push('bold');
+        if (!(await button.count())) warnings.push(name);
+        else if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click();
       }
       if (text.align && text.align !== 'left') {
         const alignButton = editor.page
@@ -959,12 +1024,10 @@ export class LookerStudioUiReportRepository implements ReportRepository {
 
   private async setEmbedUrl(editor: LookerStudioEditor, url: string): Promise<string[]> {
     await editor.openTab('Setup');
-    const box = editor.page.locator(`${SEL.propertiesPanel} input`).first();
-    if (!(await box.count())) return ['External Content URL'];
-    await box.fill(url);
-    await box.press('Enter');
+    // By its label: the panel's first input is the settings search box.
+    const missing = await editor.applySettings({ [EMBED_URL_LABEL]: url });
     await editor.settle(1500);
-    return [];
+    return missing;
   }
 
   async duplicateComponent(
@@ -1079,7 +1142,11 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       const warnings: string[] = [];
       if (settings.dataSource) {
         await editor.step(`choose data source ${settings.dataSource}`, async () => {
-          await editor.page.locator(tag).getByText('Select a data source').first().click();
+          // A page or report that has one already shows it in the selector button.
+          const empty = editor.page.locator(tag).getByText('Select a data source').first();
+          if (await empty.count()) await empty.click();
+          else
+            await editor.page.locator(`${tag} button.datasource-selector-button`).first().click();
           await editor.page
             .locator('.cdk-overlay-container')
             .getByText(settings.dataSource!, { exact: true })
@@ -1367,6 +1434,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       .click({ timeout: 5_000 })
       .catch(() => undefined);
     await editor.settle(800);
+    await this.closeSourcesPanel(editor);
   }
 
   // Resource › Manage blends › Add a blend: one table per data source, joined left to right.
@@ -1545,18 +1613,27 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         [0, left],
         [1, right],
       ] as const) {
-        await dialog.getByText('Add field', { exact: true }).nth(side).click();
+        // Left and right keys are two chip columns. A key added on one side
+        // leaves a "Missing" chip on the other: it takes the matching field.
+        const column = dialog.locator('.join-keys > .chips').nth(side);
+        const missing = column.getByText('Missing', { exact: true });
+        if (await missing.count()) await missing.first().click();
+        else await column.getByText('Add field', { exact: true }).first().click();
         const search = page.locator('.cdk-overlay-container input[placeholder="Search"]').last();
         await search.waitFor({ timeout: this.opts.stepTimeoutMs });
-        await search.fill(field);
         await editor.settle(500);
-        await page
-          .locator('.cdk-overlay-container .display-name-highlighted')
-          .filter({
-            hasText: new RegExp(`^\\s*${field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`),
-          })
+        // The join key picker lists the blend's fields but its search finds
+        // none of them: click the listed chip.
+        const listed = page
+          .locator('.cdk-overlay-pane')
           .last()
-          .click();
+          .locator(`.display-name[webdriver-message="${cssEscape(field)}"]`)
+          .first();
+        if (!(await listed.count())) {
+          await page.keyboard.press('Escape');
+          throw new Error(`the merge has no field "${field}" (add it to the table's dimensions)`);
+        }
+        await listed.click();
         await editor.settle(700);
       }
     }
@@ -2785,6 +2862,35 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       const g = await editor.geometry();
       const theme = await this.readThemeName(editor);
       const dataSources = await this.readDataSources(editor, reportId);
+      const notes: string[] = [];
+      // Each part is read on its own: one that fails is noted, the rest still comes back.
+      const part = async <T>(what: string, read: () => Promise<T>): Promise<T | undefined> => {
+        try {
+          return await read();
+        } catch (err) {
+          notes.push(`${what} could not be read: ${(err as Error).message}`);
+          await LookerStudioEditor.openReport(editor.page, reportId, this.opts.stepTimeoutMs);
+          return undefined;
+        }
+      };
+      const filters = (await part('Filters', () => this.readFilterDefs(editor))) ?? new Map();
+      const fields = await part('Calculated fields and parameters', () =>
+        this.readFieldDefs(
+          editor,
+          dataSources.map((d) => d.name),
+        ),
+      );
+      const blends = await part('Blends', () => this.readBlendDefs(editor));
+      const settings = await part('Report settings', () =>
+        this.readScope(editor, 'report', filters),
+      );
+      const ctx: ReadContext = {
+        depth: style,
+        severalSources: dataSources.length + (blends?.length ?? 0) > 1,
+        filters,
+        valueColors: false,
+        notes,
+      };
       const pages = await this.readPages(editor);
       const out: ReportSnapshot['pages'] = [];
       for (const page of pages) {
@@ -2793,19 +2899,31 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         const layouts = await editor.layouts();
         const components: ComponentSnapshot[] = [];
         for (const [index, layout] of layouts.entries()) {
-          components.push(
-            await this.readComponent(editor, index, layout, style, dataSources.length > 1),
-          );
+          components.push(await this.readComponent(editor, index, layout, ctx));
         }
         await editor.deselect();
-        out.push({ name: page.name, components });
+        const pageSettings = await part(`The settings of page "${page.name}"`, () =>
+          this.readScope(editor, 'page', filters),
+        );
+        out.push({
+          name: page.name,
+          components,
+          ...(pageSettings ? { settings: pageSettings } : {}),
+        });
       }
+      const extra = (fields ?? []).filter(
+        (f) => f.calculatedFields.length || f.parameters.length || f.groups.length || f.bins.length,
+      );
       return {
         name,
         ...(theme ? { theme } : {}),
         canvas: { width: Math.round(g.width), height: Math.round(g.height) },
         dataSources,
+        ...(extra.length ? { fields: extra } : {}),
+        ...(blends?.length ? { blends } : {}),
+        ...(settings ? { settings } : {}),
         pages: out,
+        ...(notes.length ? { notes } : {}),
       };
     });
   }
@@ -2886,9 +3004,9 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     editor: LookerStudioEditor,
     index: number,
     layout: Layout,
-    depth: StyleDepth,
-    severalSources: boolean,
+    ctx: ReadContext,
   ): Promise<ComponentSnapshot> {
+    const { depth, severalSources } = ctx;
     const panel = await editor.select(index).catch(() => '');
     if (!panel) return { kind: 'other', layout, panel: 'covered component' };
     const dom = await editor.readComponentDom(index);
@@ -2946,6 +3064,15 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       const title = showTitle ? styleList.find((s) => s.label === 'Title')?.value : undefined;
       const defaultSort = !sortBy || (sortBy === metrics[0]?.field && !sortAscending);
       const dataSource = severalSources ? await editor.chartDataSource() : null;
+      const labels = Object.fromEntries(
+        [...inSection(SECTION.dimensions), ...inSection(SECTION.breakdown)].flatMap((c) =>
+          c.fields.flatMap((f) => (f.source && f.source !== f.name ? [[f.source, f.name]] : [])),
+        ),
+      );
+      const usesValueColors =
+        styleList.find((s) => s.kind === 'radio' && s.label === 'Dimension values')?.value ===
+        'selected';
+      const data = await this.readDataExtras(editor, ctx, { style: true, usesValueColors });
       await editor.openTab('Setup');
       return withStyle(
         {
@@ -2959,6 +3086,8 @@ export class LookerStudioUiReportRepository implements ReportRepository {
             ...(defaultSort ? {} : { sortBy, sortAscending }),
             ...(Object.keys(fields).length ? { fields } : {}),
             ...(title ? { title } : {}),
+            ...(Object.keys(labels).length ? { labels } : {}),
+            ...data,
           },
           ...(dataSource ? { dataSource } : {}),
         },
@@ -2974,6 +3103,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       const field = first(SECTION.control);
       const metric = first(SECTION.metrics);
       const dataSource = severalSources ? await editor.chartDataSource() : null;
+      const data = await this.readDataExtras(editor, ctx, { style: false, usesValueColors: false });
       return withStyle(
         {
           kind: 'control' as const,
@@ -2982,6 +3112,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
           ...(field ? { field } : {}),
           ...(metric ? { metric } : {}),
           ...(dataSource ? { dataSource } : {}),
+          ...(Object.keys(data).length ? { data } : {}),
         },
         await readStyle(),
       );
@@ -2992,6 +3123,8 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       const background = cssColorToHex(list.find((s) => s.label === 'Background')?.value ?? '');
       const color = dom.color ? cssColorToHex(dom.color) : null;
       const align = dom.align === 'center' || dom.align === 'right' ? dom.align : undefined;
+      // The format buttons tell bold and italic apart from a bold theme font.
+      const format = await editor.readTextFormat();
       return withStyle(
         {
           kind: 'text' as const,
@@ -3000,7 +3133,10 @@ export class LookerStudioUiReportRepository implements ReportRepository {
             text: dom.text,
             ...(dom.fontSize ? { fontSize: dom.fontSize } : {}),
             ...(color ? { color } : {}),
-            ...(dom.bold ? { bold: true } : {}),
+            ...(format.bold ? { bold: true } : {}),
+            ...(format.italic ? { italic: true } : {}),
+            ...(format.underline ? { underline: true } : {}),
+            ...(format.strikethrough ? { strikethrough: true } : {}),
             ...(background ? { background } : {}),
             ...(align ? { align } : {}),
           },
@@ -3033,28 +3169,629 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       );
     }
     if (PANEL_KIND.image.test(panel)) {
-      const url = dom.image && /^https:/i.test(dom.image) ? dom.image : undefined;
+      const image = await editor.readImage(index);
+      const alt = (await editor.listSettings()).find((s) => s.label === 'Alt text')?.value;
+      // "By URL" images show their URL as the file name, cut after 30 characters.
+      const url =
+        image && /^https:\/\/\S+$/i.test(image.label) && !image.label.endsWith('...')
+          ? image.label
+          : undefined;
+      const file =
+        image && !url
+          ? { name: image.label || 'image', type: image.type, base64: image.base64 }
+          : undefined;
+      if (!url && !file)
+        ctx.notes.push(`The image at x ${layout.x}, y ${layout.y} could not be read.`);
       return withStyle(
-        { kind: 'image' as const, layout, ...(url ? { url } : {}) },
+        {
+          kind: 'image' as const,
+          layout,
+          ...(url ? { url } : {}),
+          ...(file ? { file } : {}),
+          ...(alt ? { altText: alt } : {}),
+        },
         await readStyle(),
       );
     }
     if (PANEL_KIND.line.test(panel)) {
       const l = dom.line ?? { x1: 0, y1: 0, x2: layout.width, y2: layout.height };
+      const look = await editor.readLineStyle();
+      const style = await readStyle(['Stroke color', 'Border style']);
       return {
         kind: 'line',
         layout,
         from: { x: Math.round(layout.x + l.x1), y: Math.round(layout.y + l.y1) },
         to: { x: Math.round(layout.x + l.x2), y: Math.round(layout.y + l.y2) },
+        ...look,
+        ...(style ? { style } : {}),
       };
     }
     if (PANEL_KIND.embed.test(panel)) {
+      // The iframe shows a Looker Studio proxy; the URL is in the Setup tab's box.
+      await editor.openTab('Setup');
+      const url = (await editor.listSettings()).find(
+        (s) => s.label === EMBED_URL_LABEL && s.value,
+      )?.value;
       return withStyle(
-        { kind: 'embed' as const, layout, ...(dom.embed ? { url: dom.embed } : {}) },
+        { kind: 'embed' as const, layout, ...(url ? { url } : {}) },
         await readStyle(),
       );
     }
     return { kind: 'other', layout, panel: panel.replace(/ properties$/i, '') };
+  }
+
+  // Filters, dates, sorts and (charts) the Style tab's series, reference
+  // lines, conditional formatting and value colors of the selected component.
+  private async readDataExtras(
+    editor: LookerStudioEditor,
+    ctx: ReadContext,
+    opts: { style: boolean; usesValueColors: boolean },
+  ): Promise<DataSettings> {
+    const setup = await editor.readSetupData();
+    const dateRange = setup.dateText ? dateRangeFromLabel(setup.dateText) : undefined;
+    const out: DataSettings = {
+      ...(setup.filters.length
+        ? { filters: setup.filters.map((n) => ctx.filters.get(n) ?? { name: n }) }
+        : {}),
+      ...(dateRange ? { dateRange } : {}),
+      ...(setup.comparison ? { comparison: setup.comparison } : {}),
+      ...(setup.sorts.length ? { sorts: setup.sorts } : {}),
+    };
+    if (!opts.style) return out;
+    const series = await editor.readSeries();
+    if (series.length) out.series = series;
+    const refs = await editor.readReferences();
+    if (refs.lines.length) out.referenceLines = refs.lines;
+    if (refs.bands.length) out.referenceBands = refs.bands;
+    const cf = await editor.readConditionalFormats();
+    if (cf.formats.length) out.conditionalFormats = cf.formats;
+    if (cf.colorScales)
+      ctx.notes.push(
+        `${cf.colorScales} color scale (or empty) conditional format(s) are not exported: only rules are.`,
+      );
+    if (opts.usesValueColors && !ctx.valueColors) {
+      ctx.valueColors = true;
+      const colors = await editor.readValueColors();
+      if (Object.keys(colors).length) out.valueColors = colors;
+    }
+    return out;
+  }
+
+  // ── Report specs: filters, page/report settings, fields and blends ─────
+
+  // Resource › Manage filters › Edit of every filter: its clauses (AND groups
+  // of OR clauses), read and cancelled.
+  private async readFilterDefs(editor: LookerStudioEditor): Promise<Map<string, FilterSpec>> {
+    const page = editor.page;
+    const out = new Map<string, FilterSpec>();
+    await editor.clickMenu('Resource', ['Manage filters']);
+    const rows = page.locator('.resource-table-body .row');
+    await rows
+      .first()
+      .waitFor({ timeout: 10_000 })
+      .catch(() => undefined);
+    const names = (
+      await page.locator('.resource-table-body .row .column:first-child .text').allInnerTexts()
+    ).map((n) => n.trim());
+    for (const name of names) {
+      const row = rows.filter({ has: page.getByText(name, { exact: true }) }).first();
+      const groups = await editor.step(`read the filter "${name}"`, async () => {
+        await row.locator('[role=button][aria-label="Edit"]').click();
+        await page.getByPlaceholder('Filter name').waitFor({ timeout: this.opts.stepTimeoutMs });
+        await editor.settle(1000);
+        const read = await page.evaluate(() =>
+          [...document.querySelectorAll('.ng2-filter-expression-definition-container')].map((g) =>
+            [...g.querySelectorAll('.ng2-filter-expression-definition')].map((c) => {
+              const value = (sel: string) =>
+                c.querySelector(`${sel} .mat-mdc-select-value`)?.textContent?.trim() ?? '';
+              return {
+                exclude: value('mat-select.negation-option-select') === 'Exclude',
+                field:
+                  c.querySelector('.field-select .display-name')?.getAttribute('aria-label') ?? '',
+                condition: value('mat-select.condition-option-select'),
+                values: [...c.querySelectorAll<HTMLInputElement>('.filter-expression input')]
+                  .map((i) => i.value)
+                  .filter(Boolean),
+              };
+            }),
+          ),
+        );
+        await page.getByRole('button', { name: 'Button to cancel the filter changes' }).click();
+        await editor.settle(800);
+        // Cancel can leave Manage filters too.
+        if (
+          !(await rows
+            .first()
+            .isVisible()
+            .catch(() => false))
+        ) {
+          await editor.clickMenu('Resource', ['Manage filters']);
+          await rows.first().waitFor({ timeout: this.opts.stepTimeoutMs });
+        }
+        return read;
+      });
+      const clauses = groups
+        .map((g) =>
+          g
+            .filter((c) => c.field && c.condition)
+            .map((c) => {
+              const condition = conditionAlias(c.condition);
+              // "In" takes its values comma separated in one box.
+              const values = condition === 'in' ? c.values.flatMap((v) => v.split(',')) : c.values;
+              return {
+                field: c.field,
+                condition,
+                ...(values.length ? { values } : {}),
+                ...(c.exclude ? { exclude: true } : {}),
+              };
+            }),
+        )
+        .filter((g) => g.length);
+      const only = clauses.length === 1 && clauses[0]!.length === 1 ? clauses[0]![0]! : null;
+      out.set(name, only ? { name, ...only } : { name, clauses });
+    }
+    await page
+      .getByRole('button', { name: /^close$/i })
+      .first()
+      .click()
+      .catch(() => undefined);
+    await editor.settle(600);
+    return out;
+  }
+
+  // Page › Current page settings or File › Report settings: data source,
+  // filters of its own, date range dimension and default range, page style.
+  private async readScope(
+    editor: LookerStudioEditor,
+    scope: 'page' | 'report',
+    filters: Map<string, FilterSpec>,
+  ): Promise<ScopeSettings | undefined> {
+    await editor.deselect();
+    if (scope === 'page') await editor.clickMenu('Page', ['Current page settings']);
+    else await editor.clickMenu('File', ['Report settings']);
+    await editor.settle(800);
+    const heading = scope === 'page' ? 'Current Page Settings' : 'Report Settings';
+    const tag = await this.scopeFor(editor, heading, `${scope}-settings`);
+    const data = await editor.readSetupData(tag);
+    const style: StyleSettings = {};
+    if (scope === 'page') {
+      await editor.page.locator(tag).getByText('Style', { exact: true }).first().click();
+      await editor.settle(500);
+      const fields = await editor.page.locator(tag).evaluate((panel) =>
+        [...panel.querySelectorAll('mat-form-field')].map((f) => ({
+          label: f.querySelector('mat-label, label')?.textContent?.trim() ?? '',
+          value:
+            f.querySelector('input')?.value ||
+            f.querySelector<HTMLElement>('.color-preview-cell, [style*="background"]')?.style
+              .backgroundColor ||
+            '',
+        })),
+      );
+      for (const f of fields) {
+        if (f.label === 'Page background') {
+          const hex = cssColorToHex(f.value);
+          if (hex) style[f.label] = hex;
+        } else if (/^(Width|Height) \(px\)$/.test(f.label) && Number(f.value) > 0)
+          style[f.label] = Number(f.value);
+      }
+    }
+    await editor.page.keyboard.press('Escape');
+    await editor.deselect();
+    const dateRange = data.dateText ? dateRangeFromLabel(data.dateText) : undefined;
+    const settings: ScopeSettings = {
+      // A page without one of its own shows "Default (<report's data source>)".
+      ...(data.dataSource && !/^(Select a data source|Default \()/.test(data.dataSource)
+        ? { dataSource: data.dataSource }
+        : {}),
+      ...(data.filters.length
+        ? { filters: data.filters.map((n) => filters.get(n) ?? { name: n }) }
+        : {}),
+      ...(data.dateRangeDimension ? { dateRangeDimension: data.dateRangeDimension } : {}),
+      ...(dateRange ? { dateRange } : {}),
+      ...(Object.keys(style).length ? { style } : {}),
+    };
+    return settings.filters || settings.dateRange || settings.dateRangeDimension || settings.style
+      ? settings
+      : settings.dataSource && scope === 'page'
+        ? settings
+        : undefined;
+  }
+
+  // The data source editor of each source: its calculated, group and bin
+  // fields (the "fx" ones) and its parameters ("@"), each opened and closed.
+  private async readFieldDefs(
+    editor: LookerStudioEditor,
+    sources: string[],
+  ): Promise<DataSourceFields[]> {
+    const page = editor.page;
+    const out: DataSourceFields[] = [];
+    for (const source of sources) {
+      const defs: DataSourceFields = {
+        dataSource: source,
+        calculatedFields: [],
+        parameters: [],
+        groups: [],
+        bins: [],
+      };
+      await this.openSourceEditor(editor, source);
+      await editor.settle(1000);
+      const entries = await this.listFieldEntries(editor);
+      const refresh = page.getByRole('button', { name: 'REFRESH FIELDS' });
+      for (const entry of entries.filter((e) => e.formula || e.parameter)) {
+        // A field form's Close leaves the whole data source editor: open it again.
+        if (!(await refresh.isVisible().catch(() => false))) {
+          await this.openSourceEditor(editor, source);
+          await editor.settle(1000);
+        }
+        await editor.step(`read the field ${entry.name} of ${source}`, async () => {
+          const search = page.getByPlaceholder(DATA_SOURCE.searchFields).filter({ visible: true });
+          if (await search.count()) {
+            await search.last().fill(entry.name);
+            await editor.settle(600);
+          }
+          const rowSel = entry.parameter ? '.parameter-field-entry' : DATA_SOURCE.fieldRow;
+          const row = page
+            .locator(rowSel)
+            .filter({
+              has: page.getByText(new RegExp(`^\\s*${escapeRegExp(entry.name)}\\s*$`)),
+            })
+            .first();
+          await row.locator('.editable-formula').click();
+          await editor.settle(1500);
+          if (entry.parameter) {
+            defs.parameters.push(await this.readParameterForm(editor));
+            await page.getByRole('button', { name: 'Cancel', exact: true }).last().click();
+          } else {
+            const form = await this.readFieldForm(editor, entry.name);
+            if (form.kind === 'calculated') defs.calculatedFields.push(form.field);
+            else if (form.kind === 'group') defs.groups.push(form.field);
+            else if (form.kind === 'bin') defs.bins.push(form.field);
+            // "← All Fields" goes back to the list; the form's Close would leave the editor.
+            await page.getByText('All Fields', { exact: true }).first().click();
+          }
+          await editor.settle(1000);
+          if (await search.count()) {
+            await search
+              .last()
+              .fill('')
+              .catch(() => undefined);
+            await editor.settle(400);
+          }
+        });
+      }
+      if (await refresh.isVisible().catch(() => false)) await this.leaveSourceEditor(editor, false);
+      await this.closeSourcesPanel(editor);
+      out.push(defs);
+    }
+    return out;
+  }
+
+  // The field list is virtual-scrolled: scroll it through to see every row.
+  private async listFieldEntries(
+    editor: LookerStudioEditor,
+  ): Promise<Array<{ name: string; formula: boolean; parameter: boolean }>> {
+    return editor.page.evaluate(async (sel) => {
+      const seen = new Map<string, { name: string; formula: boolean; parameter: boolean }>();
+      const collect = () => {
+        for (const r of document.querySelectorAll(`${sel.fieldRow}, .parameter-field-entry`)) {
+          const name =
+            r.querySelector('.common-editable-label')?.textContent?.trim() ??
+            r.querySelector(sel.fieldName)?.textContent?.trim() ??
+            '';
+          if (!name || seen.has(name)) continue;
+          const parameter = r.classList.contains('parameter-field-entry');
+          seen.set(name, { name, formula: !!r.querySelector('.editable-formula'), parameter });
+        }
+      };
+      const row = document.querySelector(`${sel.fieldRow}, .parameter-field-entry`);
+      const viewport = row?.closest('cdk-virtual-scroll-viewport') as HTMLElement | null;
+      collect();
+      if (viewport) {
+        for (let top = 0; top <= viewport.scrollHeight; top += viewport.clientHeight / 2) {
+          viewport.scrollTop = top;
+          await new Promise((r) => setTimeout(r, 250));
+          collect();
+        }
+        viewport.scrollTop = 0;
+      }
+      return [...seen.values()];
+    }, DATA_SOURCE);
+  }
+
+  private async readParameterForm(editor: LookerStudioEditor): Promise<ParameterSpec> {
+    const page = editor.page;
+    await page
+      .locator('input[formcontrolname="displayName"]')
+      .waitFor({ timeout: this.opts.stepTimeoutMs });
+    const read = await page.evaluate(() => {
+      const input = (name: string) =>
+        document.querySelector<HTMLInputElement>(`input[formcontrolname="${name}"]`)?.value ?? '';
+      const label = [...document.querySelectorAll<HTMLElement>('*')].find(
+        (e) => e.children.length === 0 && e.textContent?.trim() === 'Default Value',
+      );
+      let def: string | undefined;
+      for (let box = label?.parentElement; box && def === undefined; box = box.parentElement) {
+        const control = box.querySelector('input:not([formcontrolname="value"]), mat-select');
+        if (control instanceof HTMLInputElement) def = control.value;
+        else if (control) def = control.textContent?.trim();
+      }
+      const checked = [...document.querySelectorAll('mat-radio-button')].find(
+        (r) => r.querySelector<HTMLInputElement>('input[type=radio]')?.checked,
+      );
+      return {
+        name: input('displayName'),
+        id: input('name'),
+        dataType:
+          document
+            .querySelector('mat-select[formcontrolname="dataType"] .mat-mdc-select-value')
+            ?.textContent?.trim() ?? '',
+        permitted: checked?.textContent?.trim() ?? '',
+        values: [...document.querySelectorAll<HTMLInputElement>('input[formcontrolname="value"]')]
+          .map((i) => i.value)
+          .filter(Boolean),
+        defaultValue: def ?? '',
+      };
+    });
+    const types = ['Text', 'Number (whole)', 'Number (decimal)', 'Boolean'] as const;
+    const dataType = types.find((t) => t === read.dataType);
+    return {
+      name: read.name,
+      ...(read.id ? { id: read.id } : {}),
+      ...(dataType && dataType !== 'Text' ? { dataType } : {}),
+      ...(read.permitted === 'List of values' && read.values.length ? { values: read.values } : {}),
+      ...(read.defaultValue ? { defaultValue: read.defaultValue } : {}),
+    };
+  }
+
+  // The form an "fx" field opens: a formula (calculated field), groups or bins.
+  private async readFieldForm(
+    editor: LookerStudioEditor,
+    name: string,
+  ): Promise<
+    | { kind: 'calculated'; field: CalculatedFieldSpec }
+    | { kind: 'group'; field: GroupFieldSpec }
+    | { kind: 'bin'; field: BinFieldSpec }
+    | { kind: 'other' }
+  > {
+    const read = await editor.page.evaluate(() => {
+      const text = (e: Element | null | undefined) =>
+        e?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+      const byLabel = (root: ParentNode, label: string) =>
+        [...root.querySelectorAll('mat-form-field')].find(
+          (f) => text(f.querySelector('mat-label')) === label,
+        );
+      const valueOf = (f: Element | undefined) =>
+        f?.querySelector<HTMLInputElement>('input, textarea')?.value ||
+        text(f?.querySelector('.mat-mdc-select-value'));
+      const form = document.querySelector('form.bucketed-fields');
+      if (form) {
+        const field =
+          form
+            .querySelector('.select-concept-container .display-name')
+            ?.getAttribute('aria-label') ?? '';
+        if (/new bin/i.test(text(form.querySelector('p.description'))))
+          return {
+            kind: 'bin' as const,
+            field,
+            size: valueOf(byLabel(form, 'Bin Size')),
+            min: valueOf(byLabel(form, 'Bin min value')),
+            max: valueOf(byLabel(form, 'Bin max value')),
+          };
+        const others = form.querySelector<HTMLInputElement>('.show-others input[type=checkbox]');
+        return {
+          kind: 'group' as const,
+          field,
+          groups: [...form.querySelectorAll('.subgroup')].map((g) => ({
+            name: valueOf(byLabel(g, 'Group name')),
+            exclude: valueOf(byLabel(g, 'Include or Exclude')) === 'Exclude',
+            condition: valueOf(byLabel(g, 'Condition')),
+            values: [...g.querySelectorAll('.chip-label')].map((c) => text(c)).filter(Boolean),
+            value:
+              byLabel(g, 'Group values')?.querySelector<HTMLInputElement>('input')?.value ?? '',
+          })),
+          other: others?.checked
+            ? (form.querySelector<HTMLInputElement>('input.others')?.value ?? '')
+            : '',
+        };
+      }
+      const host = document.querySelector('ng2-code-mirror-formula .CodeMirror') as
+        (Element & { CodeMirror?: { getValue(): string } }) | null;
+      if (host?.CodeMirror)
+        return { kind: 'calculated' as const, formula: host.CodeMirror.getValue() };
+      return { kind: 'other' as const };
+    });
+    const num = (v: string) =>
+      v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined;
+    if (read.kind === 'calculated')
+      return { kind: 'calculated', field: { name, formula: read.formula } };
+    if (read.kind === 'bin') {
+      const size = num(read.size);
+      if (size === undefined) return { kind: 'other' };
+      const min = num(read.min);
+      const max = num(read.max);
+      return {
+        kind: 'bin',
+        field: {
+          name,
+          field: read.field,
+          size,
+          ...(min !== undefined ? { min } : {}),
+          ...(max !== undefined ? { max } : {}),
+        },
+      };
+    }
+    if (read.kind === 'group')
+      return {
+        kind: 'group',
+        field: {
+          name,
+          field: read.field,
+          groups: read.groups.map((g) => ({
+            name: g.name,
+            condition: conditionAlias(g.condition),
+            values: g.values.length ? g.values : g.value ? [g.value] : [],
+            ...(g.exclude ? { exclude: true } : {}),
+          })),
+          ...(read.other ? { otherGroup: read.other } : {}),
+        },
+      };
+    return { kind: 'other' };
+  }
+
+  // In Resource › Manage blends: the name of each row, in order.
+  private listedBlends(editor: LookerStudioEditor): Promise<string[]> {
+    return editor.page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>('[role=button][aria-label="Edit"]')]
+        .filter((b) => b.getBoundingClientRect().width > 0)
+        .map((b) => {
+          let row: HTMLElement | null = b;
+          while (row && !row.querySelector('[role=button][aria-label="Duplicate"]'))
+            row = row.parentElement;
+          return row?.innerText.split('\n')[0]?.trim() ?? '';
+        }),
+    );
+  }
+
+  // What apply_report_spec checks before adding fields and blends to a report.
+  async fieldNames(
+    reportId: string,
+  ): Promise<{ fields: Record<string, string[]>; blends: string[] }> {
+    return this.edit(reportId, async (editor) => {
+      await this.openSourcesPanel(editor);
+      const sources = await this.listedSources(editor);
+      await this.closeSourcesPanel(editor);
+      const fields: Record<string, string[]> = {};
+      for (const source of sources) {
+        await this.openSourceEditor(editor, source);
+        await editor.settle(1000);
+        fields[source] = (await this.listFieldEntries(editor)).map((e) => e.name);
+        await this.leaveSourceEditor(editor, false);
+        await this.closeSourcesPanel(editor);
+      }
+      await editor.clickMenu('Resource', ['Manage blends']);
+      await editor.settle(1500);
+      const blends = (await this.listedBlends(editor)).filter(Boolean);
+      await editor.page
+        .getByRole('button', { name: /^close$/i })
+        .first()
+        .click({ timeout: 3_000 })
+        .catch(() => undefined);
+      return { fields, blends };
+    });
+  }
+
+  // Resource › Manage blends › Edit: each table's data source, dimensions and
+  // metrics, and each join's type and keys. Closed without saving.
+  private async readBlendDefs(editor: LookerStudioEditor): Promise<BlendSpec[]> {
+    const page = editor.page;
+    const out: BlendSpec[] = [];
+    const openList = async () => {
+      await editor.clickMenu('Resource', ['Manage blends']);
+      await editor.settle(1500);
+    };
+    await openList();
+    const names = await this.listedBlends(editor);
+    for (const [i, name] of names.entries()) {
+      if (!name) continue;
+      if (i > 0) await openList();
+      const blend = await editor.step(`read the blend ${name}`, async () => {
+        const edit = page.locator('[role=button][aria-label="Edit"]').filter({ visible: true });
+        const box = await edit.nth(i).boundingBox();
+        if (!box) throw new Error('its Edit button was not found');
+        // The menu bar's drop-back stays over the list: click by position.
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        await page
+          .getByText('Table 1', { exact: true })
+          .first()
+          .waitFor({ timeout: this.opts.stepTimeoutMs });
+        await editor.settle(2500);
+        const tables: BlendSpec['tables'] = [];
+        for (let t = 0; t < 5; t++) {
+          const table = await this.blendTable(editor, t).catch(() => null);
+          if (!table) break;
+          tables.push(
+            await table.evaluate((el) => {
+              const chips = (label: string) => {
+                const section = [...el.querySelectorAll('.section')].find(
+                  (s) => s.querySelector(':scope > .section-label')?.textContent?.trim() === label,
+                );
+                return [...(section?.querySelectorAll('.left-half[aria-label]') ?? [])].map((c) =>
+                  c.getAttribute('aria-label')!,
+                );
+              };
+              return {
+                dataSource: el.querySelector('.datasource-name-label')?.textContent?.trim() ?? '',
+                dimensions: chips('Dimensions'),
+                metrics: chips('Metrics'),
+              };
+            }),
+          );
+        }
+        const joins: BlendSpec['joins'] = [];
+        for (let j = 1; j < tables.length; j++) {
+          await page
+            .locator('.join-details')
+            .nth(j - 1)
+            .click();
+          const dialog = page
+            .locator('mat-dialog-container')
+            .filter({ hasText: 'Merge configuration' });
+          await dialog.waitFor({ timeout: this.opts.stepTimeoutMs });
+          await editor.settle(800);
+          const read = await dialog.evaluate((d) => {
+            const column = (n: number) => {
+              const chips = d.querySelectorAll('.join-keys > .chips').item(n);
+              return [...(chips?.querySelectorAll('.left-half[aria-label]') ?? [])].map((c) =>
+                c.getAttribute('aria-label')!,
+              );
+            };
+            return {
+              type:
+                d
+                  .querySelector('mat-button-toggle.mat-button-toggle-checked .join-heading')
+                  ?.textContent?.trim()
+                  .toLowerCase() ?? '',
+              left: column(0),
+              right: column(1),
+            };
+          });
+          const types = ['left outer', 'right outer', 'inner', 'full outer', 'cross'] as const;
+          const type = types.find((t) => t === read.type);
+          joins.push({
+            ...(type ? { type } : {}),
+            keys: read.left.flatMap((l, k) =>
+              read.right[k] ? [[l, read.right[k]!] as [string, string]] : [],
+            ),
+          });
+          await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+          await editor.settle(800);
+        }
+        const blendName =
+          (await page
+            .getByPlaceholder('Blend name')
+            .or(page.getByLabel('Blend name'))
+            .first()
+            .inputValue()
+            .catch(() => '')) || name;
+        return { name: blendName, tables, joins };
+      });
+      out.push(blend);
+      // Close the blend editor, then the list of blends.
+      for (let k = 0; k < 2; k++) {
+        await page
+          .getByRole('button', { name: /^close$/i })
+          .first()
+          .click({ timeout: 5_000 })
+          .catch(() => undefined);
+        await editor.settle(1000);
+      }
+    }
+    await page
+      .getByRole('button', { name: /^close$/i })
+      .first()
+      .click({ timeout: 3_000 })
+      .catch(() => undefined);
+    return out;
   }
 
   // ── Report operations ──

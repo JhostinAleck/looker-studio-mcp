@@ -253,6 +253,8 @@ export interface ChartSpec extends DataSettings {
   // A breakdown dimension (stacked bars, one line per value…).
   breakdown?: string;
   title?: string;
+  // Display names of dimensions (and the breakdown) by field name.
+  labels?: Record<string, string>;
 }
 
 export const CONTROL_KINDS = [
@@ -658,4 +660,26 @@ export function cssColorToHex(value: string): string | null {
     .map((n) => Math.min(255, Number(n)).toString(16).padStart(2, '0'))
     .join('')
     .toUpperCase()}`;
+}
+
+// ── Report specs ──
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// The date picker's text as a date_range: "Sep 1, 2026 - Oct 15, 2026" is a
+// fixed range; a preset reads "Last 28 days (exclude today)". The default
+// ("Auto date range") is no range at all.
+export function dateRangeFromLabel(label: string): string | undefined {
+  const text = label.replace(/\s+/g, ' ').trim();
+  if (!text || /^auto( date range)?$/i.test(text)) return undefined;
+  const fixed = /^([A-Z][a-z]{2}) (\d{1,2}), (\d{4}) - ([A-Z][a-z]{2}) (\d{1,2}), (\d{4})$/.exec(
+    text,
+  );
+  if (fixed) {
+    const iso = (m: string, d: string, y: string) =>
+      `${y}-${String(MONTHS.indexOf(m) + 1).padStart(2, '0')}-${d.padStart(2, '0')}`;
+    if (MONTHS.includes(fixed[1]!) && MONTHS.includes(fixed[4]!))
+      return `${iso(fixed[1]!, fixed[2]!, fixed[3]!)}..${iso(fixed[4]!, fixed[5]!, fixed[6]!)}`;
+  }
+  return text.replace(/\s*\(exclude today\)$/i, '');
 }
