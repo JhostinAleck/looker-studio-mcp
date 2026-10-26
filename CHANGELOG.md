@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix: charts drawn in an iframe (bar, column, line, pie and other Vega charts) were selected with a selection box that also took, or dragged, overlapping components, so `add_chart` over a text box failed with "Multiple Properties" and a failure cleanup or `delete_component` could delete the other components too. Selection now clicks through the iframe, resizes and moves let drags pass over iframes, and deletes refuse a multiple selection and undo a Delete that removed more than one component.
 - Reports with viewer's-credentials data sources no longer block every tool behind "Grant consent": each editor visit declines it whenever it appears (late, or again after a reload) instead of granting it; `check_report` and `screenshot_report` say which charts need the viewer's consent.
 - Fix: a chart's `date_range` failed with "the date picker did not open" whenever the Custom radio had to be turned on: its tooltip covered the picker. `set_page_settings` now explains that a default date range needs a date range dimension first (a custom query with date range parameters has no date field, but follows the page or report range).
 - `update_data_source` dry-runs a new `sql` in `project_id` (or the config's project) before opening the editor; `copy_report` dry-runs custom query replacements and refuses non-BigQuery ones.

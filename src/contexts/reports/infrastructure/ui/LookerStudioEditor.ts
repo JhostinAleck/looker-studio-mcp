@@ -387,25 +387,56 @@ export class LookerStudioEditor {
     await this.answerConsent().catch(() => false);
     await this.page.keyboard.press('Escape');
     await this.closeBackdrop();
-    if (await this.component(index).locator('iframe').count()) {
-      // A click on a URL embed lands in the embedded page: draw a selection
-      // box around it from the empty canvas instead.
-      await this.deselect();
-      const box = (await this.layouts())[index]!;
-      const from = await this.toScreen(Math.max(0, box.x - 8), Math.max(0, box.y - 8));
-      const to = await this.toScreen(box.x + box.width + 8, box.y + box.height + 8);
-      await this.slowDrag(from, to);
-    } else {
+    // Vega charts, community visualizations and URL embeds draw in an iframe
+    // that takes the click: let it reach the component underneath.
+    const unblock = await this.unblockIframes();
+    try {
       // The selection handles of a tiny or flat component (a line) cover it.
       const point = await this.clickablePoint(index).catch(async () => {
         await this.deselect();
         return this.clickablePoint(index);
       });
       await this.page.mouse.click(point.x, point.y);
+    } finally {
+      await unblock();
     }
     await sleep(700);
+    if (!(await this.panelTitle()) && (await this.component(index).locator('iframe').count())) {
+      // Last resort: a selection box dragged from the empty canvas. It also
+      // takes any component lying inside the box.
+      await this.deselect();
+      const box = (await this.layouts())[index]!;
+      const from = await this.toScreen(Math.max(0, box.x - 8), Math.max(0, box.y - 8));
+      const to = await this.toScreen(box.x + box.width + 8, box.y + box.height + 8);
+      await this.slowDrag(from, to);
+      await sleep(700);
+    }
     await this.closeDatePopup();
     return this.panelTitle();
+  }
+
+  // Lets clicks and drags through the canvas iframes until the returned
+  // function is called.
+  private async unblockIframes(): Promise<() => Promise<void>> {
+    const style = await this.page.addStyleTag({
+      content: `${SEL.canvas} iframe { pointer-events: none !important; }`,
+    });
+    return () => style.evaluate((e: Element) => e.remove()).catch(() => undefined);
+  }
+
+  // Deletes one component, never more: a selection that took other
+  // components too is refused, and a Delete that removed more is undone.
+  async remove(index: number): Promise<void> {
+    const before = (await this.layouts()).length;
+    if ((await this.select(index)) === SEL.multipleSelection) {
+      await this.deselect();
+      throw new EditorStepError(`component ${index} could not be selected on its own`);
+    }
+    await this.page.keyboard.press('Delete');
+    await this.settle();
+    const after = (await this.layouts()).length;
+    if (after < before - 1) await this.undo();
+    if (after !== before - 1) throw new EditorStepError(`component ${index} was not deleted`);
   }
 
   // Selects several components: the first by a click, the rest by Shift+click.
@@ -506,6 +537,8 @@ export class LookerStudioEditor {
 
   // Moves and resizes with the mouse, then corrects the position with 1px nudges.
   async applyLayout(index: number, target: Partial<Layout>): Promise<Layout> {
+    // A drag passing over an iframe (Vega charts, embeds) is lost to it.
+    const unblock = await this.unblockIframes();
     return this.step(`move component ${index}`, async () => {
       await this.select(index);
       // The resize handle is the bottom-right corner: if it hangs off the
@@ -546,7 +579,7 @@ export class LookerStudioEditor {
       }
       await this.settle(500);
       return (await this.layouts())[index]!;
-    });
+    }).finally(unblock);
   }
 
   // Big moves drag the body; the last pixels are Shift+Arrow nudges (1px each).

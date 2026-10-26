@@ -68,6 +68,7 @@ npm test             # vitest watch
 - Making a component report-level puts it on top of every other component: a header band made report-level last covers its logo and title.
 - Sharing: Google refuses invitations from a headless browser and from a Send with several chips. One address per Send, in a visible window (`withPage(work, { visible: true })`). Changing an existing person's role closes the dialog.
 - A selected button opens a link menu over a transparent backdrop that ignores Escape and swallows the next click: `select` clicks the backdrop away first.
+- Vega charts (bar, column, line, pie, …) also draw in an iframe; a click on it still selects the chart. Turn off canvas iframe pointer events while clicking or dragging: a selection box takes every component inside it, and starts by dragging whatever lies under its corner.
 - URL embeds are iframes: a click lands in the embedded page. Select them with a selection box dragged from the empty canvas. Inserted by a click they come in at 400x300; dragged out they stay at 6x6.
 - A new line keeps the drawing state: deselect before selecting it. Its "Line start"/"Line end" drop-downs have no label (values None, Circle, Diamond, Pointer).
 - Page › Current page settings only shows Filter and Date range dimension when the page has a chart with data.
