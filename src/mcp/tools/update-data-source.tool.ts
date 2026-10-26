@@ -16,12 +16,20 @@ export async function handleUpdateDataSource(
     ...(input.sql !== undefined ? { sql: input.sql } : {}),
     ...(input.credentials ? { credentials: input.credentials } : {}),
     ...(input.freshness ? { freshness: input.freshness } : {}),
+    ...(input.make_reusable ? { makeReusable: true } : {}),
+    ...(input.grant_editor_access !== undefined
+      ? { grantEditorAccess: input.grant_editor_access }
+      : {}),
   };
   // The data source's billing project is only known in the editor: dry-run in
   // the given or default project, so a broken query fails before Looker opens.
   const project = input.project_id ?? deps.defaultProject;
   if (change.sql && project) await checkQuerySource(deps, { projectId: project, sql: change.sql });
-  const what = Object.keys(change).join(', ') || 'nothing';
+  const what =
+    Object.keys(change)
+      .filter((k) => k !== 'grantEditorAccess')
+      .map((k) => (k === 'makeReusable' ? 'reusability' : k))
+      .join(', ') || 'nothing';
   return runWrite(
     deps,
     'update_data_source',
