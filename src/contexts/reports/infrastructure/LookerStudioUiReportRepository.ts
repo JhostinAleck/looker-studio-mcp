@@ -196,7 +196,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       try {
         const result = await work(editor);
         // Lets autosave finish before the tab closes.
-        await editor.settle(1500);
+        await editor.settleBeforeClose();
         return result;
       } catch (err) {
         // Keep what the editor showed when a step failed, to debug it.
@@ -1966,7 +1966,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         windowId,
         bounds: { height: original + needed - size.height },
       });
-      await tab.waitForTimeout(2000);
+      await this.waitForResize(tab, canvas, size.height);
       return async () => {
         await cdp
           .send('Browser.setWindowBounds', { windowId, bounds: { height: original } })
@@ -1979,6 +1979,23 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     }
   }
 
+  // ── Window resize: wait for the editor to relayout ─────────────────────
+
+  // Instead of a fixed 2 s: the window has grown and the canvas stopped moving.
+  private async waitForResize(tab: Page, canvas: Locator, fromHeight: number): Promise<void> {
+    await tab
+      .waitForFunction((h) => window.innerHeight > h, fromHeight, { timeout: 2_000 })
+      .catch(() => undefined);
+    const deadline = Date.now() + 2_000;
+    let last = '';
+    while (Date.now() < deadline) {
+      const box = JSON.stringify(await canvas.boundingBox().catch(() => null));
+      if (box === last) return;
+      last = box;
+      await tab.waitForTimeout(200);
+    }
+  }
+
   async screenshot(reportId: string, page?: number): Promise<{ path: string; notes: string[] }> {
     return this.opts.browser.withPage(async (tab) => {
       const editor = await LookerStudioEditor.openReport(tab, reportId, this.opts.stepTimeoutMs);
@@ -1988,9 +2005,15 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         viewUrl.includes('hl=') ? viewUrl : `${viewUrl}${viewUrl.includes('?') ? '&' : '?'}${HL}`,
         { waitUntil: 'domcontentloaded' },
       );
-      await tab.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => undefined);
-      // Charts render after their queries return.
-      await tab.waitForTimeout(3000);
+      // 'networkidle' never comes in the viewer either (it waited its whole
+      // 30 s): wait for the charts' shimmers instead, then let them paint.
+      await tab
+        .locator(SEL.canvas)
+        .first()
+        .waitFor({ timeout: this.opts.stepTimeoutMs })
+        .catch(() => undefined);
+      await editor.waitForCharts(30_000);
+      await editor.settle(1000);
       await editor.declineConsent(2_000);
       const notes = editor.consentDeclines
         ? [
@@ -2710,6 +2733,21 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     const page = editor.page;
     return editor.step('read the connection', async () => {
       await this.openConnection(editor);
+      // The connector fills its project/dataset/table columns late, sometimes
+      // over 6 s after Reconnect shows: wait for the table or the query box.
+      await page
+        .waitForFunction(
+          (sel) => {
+            const host = document.querySelector(sel.customQueryEditor);
+            if (host && host.getBoundingClientRect().width > 0) return true;
+            return [...document.querySelectorAll(sel.selectedOption)].some((a) =>
+              /[?&]t=/.test(a.getAttribute('href') ?? ''),
+            );
+          },
+          { customQueryEditor: SEL.customQueryEditor, selectedOption: DATA_SOURCE.selectedOption },
+          { timeout: 15_000 },
+        )
+        .catch(() => undefined);
       const found = await page.evaluate(
         (sel) => {
           const host = document.querySelector(sel.customQueryEditor) as
@@ -2823,7 +2861,6 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   // instead of opening, fitting and closing the report again.
   async inOneVisit<T>(reportId: string, work: () => Promise<T>): Promise<T> {
     return this.edit(reportId, (editor) => {
-      editor.trackNetwork();
       const visit: EditorVisit = { reportId, editor, restores: [], dirty: false };
       return this.visit.run(visit, async () => {
         try {
