@@ -8,7 +8,10 @@ import {
   validateChart,
   validateControl,
 } from '@/contexts/reports/domain/Report.js';
-import { datePresetPath } from '@/contexts/reports/infrastructure/ui/selectors.js';
+import {
+  controlPanelTitle,
+  datePresetPath,
+} from '@/contexts/reports/infrastructure/ui/selectors.js';
 import { LinkingQueryParametersError, buildLinkingUrl } from '@/contexts/reports/domain/linking.js';
 
 const ID = '1a2b3c4d-0000-4000-8000-1234567890ab';
@@ -132,6 +135,31 @@ describe('datePresetPath', () => {
     expect(datePresetPath('This month')).toEqual(['This month', 'This month']);
     expect(datePresetPath('Yesterday')).toEqual(['Yesterday']);
     expect(() => datePresetPath('Last 3 days')).toThrow(/not a date range preset/);
+  });
+});
+
+describe('controlPanelTitle', () => {
+  const dropDown = 'Drop-down list properties';
+
+  it('names the drop-down variant the control draws', () => {
+    expect(controlPanelTitle(dropDown, [], null)).toBe(dropDown);
+    expect(controlPanelTitle(dropDown, ['list-control'], null)).toBe('Fixed-size list properties');
+    expect(controlPanelTitle(dropDown, ['input.simple-text-box'], null)).toBe(
+      'Input box properties',
+    );
+    expect(controlPanelTitle(dropDown, ['input.advanced-filter-text-box'], null)).toBe(
+      'Advanced filter properties',
+    );
+    expect(controlPanelTitle(dropDown, ['lego-slider'], null)).toBe('Slider properties');
+    expect(controlPanelTitle(dropDown, ['checkbox-control'], null)).toBe('Checkbox properties');
+  });
+
+  it('tells a preset filter from a button by its action', () => {
+    expect(controlPanelTitle('Button properties', [], 'Filter')).toBe('Preset filter properties');
+    expect(controlPanelTitle('Button properties', [], 'Navigation')).toBe('Button properties');
+    expect(controlPanelTitle('Table properties', ['list-control'], 'Filter')).toBe(
+      'Table properties',
+    );
   });
 });
 

@@ -143,6 +143,38 @@ export const CONTROL_LABELS: Record<ControlKind, string> = {
   button: 'Button',
 };
 
+// ── Control variants ──
+
+// The drop-down, fixed-size list, input box, advanced filter, slider and
+// checkbox all open "Drop-down list properties", and a preset filter is a button whose action is
+// Filter ("Button properties"). What the control draws, and the button's
+// action, tell them apart. First match wins.
+export const DROP_DOWN_VARIANTS: ReadonlyArray<readonly [ControlKind, string]> = [
+  ['fixed_size_list', 'list-control'],
+  ['advanced_filter', 'input.advanced-filter-text-box'],
+  ['input_box', 'input.simple-text-box'],
+  ['slider', 'lego-slider'],
+  ['checkbox', 'checkbox-control'],
+];
+export const PRESET_FILTER_ACTION = 'Filter';
+
+// The panel title of the control a component really is. `drawn` lists the
+// DROP_DOWN_VARIANTS selectors found in it; `buttonAction` is the checked
+// "Button action type".
+export function controlPanelTitle(
+  title: string,
+  drawn: readonly string[],
+  buttonAction: string | null,
+): string {
+  const of = (kind: ControlKind) => `${CONTROL_LABELS[kind]} properties`;
+  if (title === of('drop_down')) {
+    const variant = DROP_DOWN_VARIANTS.find(([, css]) => drawn.includes(css));
+    return variant ? of(variant[0]) : title;
+  }
+  if (title === of('button') && buttonAction === PRESET_FILTER_ACTION) return of('preset_filter');
+  return title;
+}
+
 // The date picker's preset menu: these presets sit in a submenu named after
 // its first entry; the rest are top-level items.
 export const DATE_PRESET_GROUPS: Record<string, string[]> = {
@@ -216,7 +248,8 @@ export const SECTION = {
   metrics: /^(Metric|Primary field)/,
   breakdown: /^Breakdown dimension$/,
   sort: /^Sort( #1)?$/,
-  control: /^Control field$/,
+  // A dimension control calls its slot "Dimension".
+  control: /^(Control field|Dimension)$/,
 } as const;
 
 // A Setup slot named by the caller, matched whole and case-insensitively.
@@ -329,6 +362,11 @@ export const PAGE_MENU: Record<Exclude<PageAction, 'hide' | 'show'>, string> = {
 export const SEL = {
   canvas: '.reportArea',
   component: '.lego-component-repeat',
+  // A click on a drop-down in the editor opens its value list on <body>, drawn
+  // over the control itself; an advanced filter opens its condition menu and a
+  // data control its data source menu (an md-panel).
+  controlPopup:
+    'canvas-control-editor, .md-select-menu-container.md-active, .md-panel-outer-wrapper',
   propertiesPanel: 'properties-panel article.property-panel',
   // Page names in the Page › Manage pages panel.
   pageChip: '.nav-item-chip.page-chip .chip-text',
