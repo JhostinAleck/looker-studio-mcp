@@ -575,6 +575,46 @@ export const SPEC_SKIPPED_SECTIONS =
 export const SPEC_DETAILED_SECTIONS =
   /^(Dimension|Row dimension|Column dimension|Metric|Primary field|Breakdown dimension|Control field)/i;
 
+// Images: the toolbar's Image menu inserts "By URL" through a dialog;
+// Looker Studio downloads the image and shows its URL, cut to 30 characters, as the file name.
+export const IMAGE_SEL = {
+  toolbarMenu: 'button[aria-label="Image"]',
+  byUrl: 'By URL',
+  urlDialog: 'Insert image by URL',
+  insert: 'Insert',
+} as const;
+
+// URL embeds: the page they show, in the Setup tab.
+export const EMBED_URL_LABEL = 'External Content URL';
+
+// Reading a report back: conditional formatting rules, dimension value colors, the image file.
+export const SPEC_SEL = {
+  manageConditions: 'button.manage-conditions-button',
+  conditionRow: '.conditional-rule-row',
+  editCondition: 'button.edit-condition-button',
+  conditionsSheetTitle: 'Conditional formatting rules',
+  valueColorRow: '.ng2-manage-color-mapping-rows',
+  valueColorValue: '.column.text',
+  valueColorSwatch: '.color-preview',
+  imageFileLabel: '[data-webdriver-section-label="Image File"] .mdc-button__label',
+} as const;
+
+// The short name of a filter or formatting condition as the editor labels it
+// ("Equal to (=)", "GREATER THAN"), or the label itself when it has none.
+export function conditionAlias(label: string): string {
+  const norm = (t: string) =>
+    t
+      .toLowerCase()
+      .replace(/\(.*?\)/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const wanted = norm(label);
+  const alias = Object.entries(FILTER_CONDITIONS).find(
+    ([key, value]) => /^[a-z_]+$/.test(key) && norm(value) === wanted,
+  )?.[0];
+  return alias ?? label.trim();
+}
+
 // ── Report operations ──
 // File › Make a copy, Share › Link settings, Share › Schedule delivery,
 // File › Version history and File › Embed report.

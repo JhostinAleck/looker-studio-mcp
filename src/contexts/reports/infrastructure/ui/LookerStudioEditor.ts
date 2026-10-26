@@ -9,12 +9,15 @@ import type {
   Layout,
   ReferenceBand,
   ReferenceLine,
+  SeriesSpec,
   SettingInfo,
+  SortSpec,
   StyleSettings,
 } from '@/contexts/reports/domain/Report.js';
 import {
   FIXED_RANGE_RE,
   HEX_COLOR_RE,
+  cssColorToHex,
   describeSource,
   isQuerySource,
 } from '@/contexts/reports/domain/Report.js';
@@ -52,6 +55,8 @@ import {
   SECTION,
   SEL,
   SHEETS_URL_OPTION,
+  SPEC_SEL,
+  conditionAlias,
   controlPanelTitle,
   cssEscape,
   datePresetPath,
@@ -103,6 +108,17 @@ interface SetupSlot {
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// What readSetupData finds in a Setup tab or a page/report settings panel.
+export interface SetupData {
+  filters: string[];
+  // The date picker's text ("Last 28 days (exclude today)", "Sep 1, 2026 - Oct 15, 2026").
+  dateText?: string;
+  comparison?: string;
+  sorts: SortSpec[];
+  dateRangeDimension?: string;
+  dataSource?: string;
+}
 
 // Per tab, not per editor: a batch reopens the report in the same tab.
 interface ConsentState {
@@ -1534,33 +1550,53 @@ export class LookerStudioEditor {
     const missing: string[] = [];
     let lineCount = await panel.getByText(/^Reference Line #\d+$/).count();
     let bandCount = await panel.getByText(/^Reference Band #\d+$/).count();
+    // Each line and band is its own section: its settings are set inside it,
+    // since a chart's series section has a "Line color" of its own too.
     for (const line of lines) {
       await panel.getByText('Add a reference line', { exact: true }).first().click();
       await sleep(800);
       const k = ++lineCount;
+      const scope = await this.tagSection(`Reference Line #${k}`);
+      if (!scope) {
+        missing.push(`reference line #${k}`);
+        continue;
+      }
+      // A new line takes the right axis once a series is on it: set the left one explicitly
+      // (only charts with two axes have the setting, so its absence is no warning by default).
+      const axis = await this.applySettings({ 'Line axis': line.axis ?? 'Left Y-axis' }, scope);
+      if (line.axis) missing.push(...axis);
       missing.push(
-        ...(await this.applySettings({
-          ...(line.type ? { [`Line type#${k}`]: line.type } : {}),
-          ...(line.axis ? { [`Line axis#${k}`]: line.axis } : {}),
-          ...(line.value !== undefined ? { [`Line value#${k}`]: line.value } : {}),
-          ...(line.label ? { [`Show label#${k}`]: true, [`Line label#${k}`]: line.label } : {}),
-          ...(line.color ? { [`Line color#${k}`]: line.color } : {}),
-        })),
+        ...(await this.applySettings(
+          {
+            ...(line.type ? { 'Line type': line.type } : {}),
+            ...(line.value !== undefined ? { 'Line value': line.value } : {}),
+            ...(line.label ? { 'Show label': true, 'Line label': line.label } : {}),
+            ...(line.color ? { 'Line color': line.color } : {}),
+          },
+          scope,
+        )),
       );
     }
     for (const band of bands) {
       await panel.getByText('Add a reference band', { exact: true }).first().click();
       await sleep(800);
       const k = ++bandCount;
+      const scope = await this.tagSection(`Reference Band #${k}`);
+      if (!scope) {
+        missing.push(`reference band #${k}`);
+        continue;
+      }
+      await this.applySettings({ 'Band axis': 'Left Y-axis' }, scope);
       missing.push(
-        ...(await this.applySettings({
-          [`Beginning line value#${k}`]: band.from,
-          [`Ending line value#${k}`]: band.to,
-          ...(band.label
-            ? { [`Show label#${lineCount + k}`]: true, [`Band label#${k}`]: band.label }
-            : {}),
-          ...(band.color ? { [`Background color#${k}`]: band.color } : {}),
-        })),
+        ...(await this.applySettings(
+          {
+            'Beginning line value': band.from,
+            'Ending line value': band.to,
+            ...(band.label ? { 'Show label': true, 'Band label': band.label } : {}),
+            ...(band.color ? { 'Background color': band.color } : {}),
+          },
+          scope,
+        )),
       );
     }
     return missing;
@@ -1586,13 +1622,47 @@ export class LookerStudioEditor {
           throw new Error('the field picker did not open');
       });
       await sleep(600);
+      // Its own Descending/Ascending: the numbered radios of the panel are not in sort order.
+      // The new sort is the highest "Sort #n": a lone first sort has no number, so adding
+      // the second one numbers both (#1, #2) and the count taken before is one short.
+      const numbers = (await panel.getByText(/^Sort #\d+$/).allTextContents()).map((t) =>
+        Number(t.replace(/\D+/g, '')),
+      );
+      const scope = numbers.length ? await this.tagSection(`Sort #${Math.max(...numbers)}`) : null;
+      if (!scope) {
+        missing.push(`the direction of sort #${k}`);
+        continue;
+      }
       missing.push(
-        ...(await this.applySettings({
-          [`${sort.ascending ? 'Ascending' : 'Descending'}#${k}`]: true,
-        })),
+        ...(await this.applySettings(
+          { [sort.ascending ? 'Ascending' : 'Descending']: true },
+          scope,
+        )),
       );
     }
     return missing;
+  }
+
+  // Marks the repeated subsection titled `heading` (Sort #2, Reference Line #1…)
+  // of the open panel; returns a selector for it, or null when there is none.
+  async tagSection(heading: string): Promise<string | null> {
+    const tag = heading.replace(/\W+/g, '-').toLowerCase();
+    const found = await this.page
+      .locator(SEL.propertiesPanel)
+      .first()
+      .evaluate(
+        (panel, { heading, tag }) => {
+          const title = [
+            ...panel.querySelectorAll('.section.style-repeated > h4.section-label .label-text'),
+          ].find((e) => e.textContent?.trim() === heading);
+          const section = title?.closest('.section.style-repeated');
+          if (!section) return false;
+          section.setAttribute('data-mcp-section', tag);
+          return true;
+        },
+        { heading, tag },
+      );
+    return found ? `${SEL.propertiesPanel} [data-mcp-section="${tag}"]` : null;
   }
 
   // Switches the selected chart through the "Chart types" grid, whose presets
@@ -1782,6 +1852,8 @@ export class LookerStudioEditor {
         (await this.setupSlots()).find(
           (s) => s.kind === 'chip' && s.field === name && !/^Sort/.test(s.section),
         );
+      // Scrolled away (after sorts or filters), a chip's box is off screen: bring dimensions back first.
+      await this.revealSection(SECTION.dimensions);
       let chip = await find();
       if (!chip) {
         for (const section of [SECTION.dimensions, SECTION.metrics, SECTION.breakdown]) {
@@ -2647,9 +2719,407 @@ export class LookerStudioEditor {
           (h) => h.textContent?.trim() === 'Data source',
         );
         const section = heading?.closest('properties-panel-section') ?? heading?.parentElement;
-        const value = section?.querySelector('.mat-mdc-select-value, [role=combobox], button');
+        const value =
+          section?.querySelector('.datasource-name-label') ??
+          section?.querySelector('.mat-mdc-select-value, [role=combobox], button');
         return value?.textContent?.trim() || null;
       });
+  }
+
+  // ── Report specs: reading data settings and formats ────────────────────
+
+  // Filters (by name), date range, comparison and Sort #2… of the open Setup
+  // tab, or of a page/report settings panel (`scope`), as the editor shows them.
+  async readSetupData(scope: string = SEL.propertiesPanel): Promise<SetupData> {
+    if (scope === SEL.propertiesPanel) await this.openTab('Setup');
+    return this.page
+      .locator(scope)
+      .first()
+      .evaluate((panel) => {
+        // Without the icon ligatures (calendar_today, compare_arrows).
+        const text = (e: Element | null | undefined) => {
+          if (!e) return '';
+          const copy = e.cloneNode(true) as Element;
+          copy.querySelectorAll('mat-icon, style, svg').forEach((i) => i.remove());
+          return copy.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+        };
+        const section = (label: string) =>
+          panel.querySelector(`[data-webdriver-section-label="${label}"]`);
+        // Inherited page and report filters are listed too, in their own bags.
+        const filters = [
+          ...(section('Filter')?.querySelectorAll('chippy-bag.local .left-half[aria-label]') ?? []),
+        ].map((e) => e.getAttribute('aria-label')!);
+        const custom = panel.querySelector<HTMLInputElement>(
+          'input[type=radio][aria-label="radio button: Custom"]',
+        );
+        const dateText = text(panel.querySelector('.ng2-date-picker-button .date-text'));
+        const compare = panel.querySelector(
+          'button[role=switch][aria-label="Comparison date range"]',
+        );
+        const sorts = [...panel.querySelectorAll('.section.style-repeated')].flatMap((sec) => {
+          const k = /^Sort #(\d+)$/.exec(text(sec.querySelector(':scope > h4 .label-text')));
+          const field = sec.querySelector('.left-half[aria-label]')?.getAttribute('aria-label');
+          if (!k || Number(k[1]) < 2 || !field) return [];
+          const ascending = !!sec.querySelector<HTMLInputElement>(
+            'input[type=radio][aria-label="radio button: Ascending"]',
+          )?.checked;
+          return [{ field, ascending }];
+        });
+        const dimension = section('Date range dimension')
+          ?.querySelector('.left-half[aria-label]')
+          ?.getAttribute('aria-label');
+        const source = text(
+          section('Data source')?.querySelector(
+            'button.datasource-selector-button .datasource-name-label',
+          ),
+        );
+        return {
+          filters,
+          ...((custom ? custom.checked : true) && dateText ? { dateText } : {}),
+          ...(compare?.getAttribute('aria-checked') === 'true'
+            ? { comparison: text(panel.querySelector('.compare-date-text')) }
+            : {}),
+          sorts,
+          ...(dimension ? { dateRangeDimension: dimension } : {}),
+          ...(source ? { dataSource: source } : {}),
+        };
+      });
+  }
+
+  // Every field of the repeated subsections of the Style tab whose title
+  // matches `heading` (Reference Line #1, Reference Band #2…), by label.
+  private async readRepeatedSections(heading: RegExp): Promise<Array<Record<string, string>>> {
+    await this.openTab('Style');
+    return this.page
+      .locator(SEL.propertiesPanel)
+      .first()
+      .evaluate((panel, source) => {
+        const re = new RegExp(source);
+        return [...panel.querySelectorAll('.section.style-repeated')]
+          .filter((sec) =>
+            re.test(sec.querySelector(':scope > h4 .label-text')?.textContent?.trim() ?? ''),
+          )
+          .map((sec) => {
+            const out: Record<string, string> = {};
+            for (const t of sec.querySelectorAll('button[role=switch][aria-label]'))
+              out[t.getAttribute('aria-label')!] = t.getAttribute('aria-checked') ?? '';
+            for (const f of sec.querySelectorAll('mat-form-field')) {
+              const label = f.querySelector('mat-label, label')?.textContent?.trim();
+              if (!label) continue;
+              out[label] =
+                f.querySelector('input')?.value ||
+                f.querySelector('.mat-mdc-select-value')?.textContent?.trim() ||
+                f.querySelector<HTMLElement>('.color-preview-cell')?.style.backgroundColor ||
+                '';
+            }
+            return out;
+          });
+      }, heading.source);
+  }
+
+  async readReferences(): Promise<{ lines: ReferenceLine[]; bands: ReferenceBand[] }> {
+    const color = (v: string | undefined) => (v ? (cssColorToHex(v) ?? undefined) : undefined);
+    const number = (v: string | undefined) =>
+      v !== undefined && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined;
+    const lines = (await this.readRepeatedSections(/^Reference Line #\d+$/)).map((f) => {
+      const c = color(f['Line color']);
+      const value = number(f['Line value']);
+      return {
+        ...(value !== undefined ? { value } : {}),
+        ...(f['Show label'] === 'true' && f['Line label'] ? { label: f['Line label'] } : {}),
+        ...(c ? { color: c } : {}),
+        ...(f['Line type'] && f['Line type'] !== 'Constant value' ? { type: f['Line type'] } : {}),
+        ...(f['Line axis'] && f['Line axis'] !== 'Left Y-axis' ? { axis: f['Line axis'] } : {}),
+      };
+    });
+    const bands = (await this.readRepeatedSections(/^Reference Band #\d+$/)).flatMap((f) => {
+      const from = number(f['Beginning line value']);
+      const to = number(f['Ending line value']);
+      if (from === undefined || to === undefined) return [];
+      const c = color(f['Background color']);
+      return [
+        {
+          from,
+          to,
+          ...(f['Show label'] === 'true' && f['Band label'] ? { label: f['Band label'] } : {}),
+          ...(c ? { color: c } : {}),
+        },
+      ];
+    });
+    return { lines, bands };
+  }
+
+  // Style › Series › Select metric: type, axis and color of each metric. The
+  // selector only changes what the panel shows; it is put back on All metrics.
+  async readSeries(): Promise<SeriesSpec[]> {
+    await this.openTab('Style');
+    const tagged = await this.page
+      .locator(SEL.propertiesPanel)
+      .first()
+      .evaluate((panel) => {
+        const field = [...panel.querySelectorAll('mat-form-field')].find(
+          (f) => f.querySelector('mat-label, label')?.textContent?.trim() === 'Select metric',
+        );
+        const section = field?.closest('[data-webdriver-section-label="Series"]');
+        section?.setAttribute('data-mcp-section', 'series');
+        return !!section;
+      });
+    if (!tagged) return [];
+    const scope = `${SEL.propertiesPanel} [data-mcp-section="series"]`;
+    const select = this.page.locator(scope).locator('mat-select').first();
+    await select.click({ force: true });
+    await sleep(500);
+    const options = (await this.page.getByRole('option').allTextContents()).map((o) => o.trim());
+    await this.page.keyboard.press('Escape');
+    await sleep(300);
+    const out: SeriesSpec[] = [];
+    for (const metric of options.filter((o) => o && o !== 'All metrics')) {
+      if ((await this.applySettings({ 'Select metric': metric }, scope)).length) continue;
+      const read = await this.page
+        .locator(scope)
+        .first()
+        .evaluate((sec) => {
+          const radio = (label: string) =>
+            !!sec.querySelector<HTMLInputElement>(
+              `input[type=radio][aria-label="radio button: ${label}"]`,
+            )?.checked;
+          const color = [...sec.querySelectorAll('mat-form-field')]
+            .filter((f) =>
+              ['Line color', 'Bar color', 'Color'].includes(
+                f.querySelector('mat-label, label')?.textContent?.trim() ?? '',
+              ),
+            )
+            .map((f) => f.querySelector<HTMLElement>('.color-preview-cell')?.style.backgroundColor)
+            .find(Boolean);
+          return {
+            type: radio('Bars') ? 'bars' : radio('Line') ? 'line' : undefined,
+            axis: radio('Right') ? 'right' : radio('Left') ? 'left' : undefined,
+            color,
+          };
+        });
+      const hex = read.color ? cssColorToHex(read.color) : null;
+      out.push({
+        metric,
+        ...(read.type ? { type: read.type as 'line' | 'bars' } : {}),
+        ...(read.axis ? { axis: read.axis as 'left' | 'right' } : {}),
+        ...(hex ? { color: hex } : {}),
+      });
+    }
+    await this.applySettings({ 'Select metric': 'All metrics' }, scope).catch(() => undefined);
+    return out;
+  }
+
+  // Style › Conditional formatting opens a sheet of rules; each rule's editor
+  // is opened and cancelled. Color scale rules have no spec form: counted apart.
+  async readConditionalFormats(): Promise<{ formats: ConditionalFormat[]; colorScales: number }> {
+    await this.openTab('Style');
+    const manage = this.page.locator(`${SEL.propertiesPanel} ${SPEC_SEL.manageConditions}`);
+    if (!(await manage.count())) return { formats: [], colorScales: 0 };
+    const formats: ConditionalFormat[] = [];
+    let colorScales = 0;
+    await this.step('read the conditional formatting', async () => {
+      await manage.first().click();
+      const rows = this.page.locator(SPEC_SEL.conditionRow);
+      await rows.first().waitFor({ timeout: this.timeoutMs });
+      const n = await rows.count();
+      for (let i = 0; i < n; i++) {
+        await rows.nth(i).locator(SPEC_SEL.editCondition).click();
+        const sheet = this.page.locator('.conditions-editor').last();
+        await sheet.waitFor({ timeout: this.timeoutMs });
+        await sleep(800);
+        const read = await sheet.evaluate((ed) => {
+          const text = (e: Element | null | undefined) =>
+            e?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+          const scale = !!ed.querySelector<HTMLInputElement>(
+            'input[type=radio][value="color scale"]',
+          )?.checked;
+          // AND groups of OR clauses, each clause in its own leaf container; a
+          // single group has no group container.
+          const groups = [...ed.querySelectorAll('.and-expression-container')];
+          const rules = (groups.length ? groups : [ed]).map((g) =>
+            [...g.querySelectorAll('.leaf-expression-container')].map((c) => {
+              const value = c.querySelector<HTMLInputElement>('input.input-compare-value')?.value;
+              return {
+                field:
+                  c
+                    .querySelector('.select-field-container .display-name')
+                    ?.getAttribute('aria-label') ?? '',
+                condition: text(
+                  c.querySelector('mat-select.select-condition-dropdown .mat-mdc-select-value'),
+                ),
+                ...(value ? { value } : {}),
+              };
+            }),
+          );
+          const colors: Record<string, string> = {};
+          for (const f of ed.querySelectorAll('mat-form-field')) {
+            const label = f.querySelector('mat-label')?.textContent?.trim();
+            const bg = f.querySelector<HTMLElement>('.color-preview-cell')?.style.backgroundColor;
+            if (label && bg) colors[label] = bg;
+          }
+          return {
+            scale,
+            rules,
+            applyTo: text(ed.querySelector('.select-target-option-label')),
+            colors,
+          };
+        });
+        const pick = (labels: string[]) =>
+          labels.map((l) => cssColorToHex(read.colors[l] ?? '')).find(Boolean) ?? undefined;
+        const fontColor = pick(['Cell font color', 'Font color', 'Text color']);
+        const backgroundColor = pick(['Cell background color', 'Background color', 'Fill color']);
+        const rules = read.rules
+          .map((g) => g.filter((r) => r.field && r.condition))
+          .filter((g) => g.length);
+        if (read.scale || !rules.length) colorScales++;
+        else
+          formats.push({
+            rules: rules.map((g) =>
+              g.map((r) => ({ ...r, condition: conditionAlias(r.condition) })),
+            ),
+            ...(read.applyTo ? { applyTo: read.applyTo } : {}),
+            ...(fontColor ? { fontColor } : {}),
+            ...(backgroundColor ? { backgroundColor } : {}),
+          });
+        await this.page.getByRole('button', { name: 'Cancel', exact: true }).last().click();
+        await sheet.waitFor({ state: 'hidden', timeout: this.timeoutMs });
+        await sleep(500);
+      }
+      await this.closeSheet(SPEC_SEL.conditionsSheetTitle);
+    });
+    return { formats, colorScales };
+  }
+
+  // A bottom sheet (conditional formatting rules) closes with the × next to its title.
+  private async closeSheet(title: string): Promise<void> {
+    const point = await this.page.evaluate((title) => {
+      const head = [...document.querySelectorAll<HTMLElement>('*')].find(
+        (e) => e.children.length === 0 && e.textContent?.trim().startsWith(title),
+      );
+      for (let box = head?.parentElement; box; box = box.parentElement) {
+        const close = [...box.querySelectorAll<HTMLElement>('button')].find(
+          (b) =>
+            b.querySelector('mat-icon')?.getAttribute('data-mat-icon-name') === 'close' ||
+            /^close$/i.test(b.getAttribute('aria-label') ?? b.textContent?.trim() ?? ''),
+        );
+        if (close) {
+          const r = close.getBoundingClientRect();
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        }
+      }
+      return null;
+    }, title);
+    if (point) await this.page.mouse.click(point.x, point.y);
+    else await this.page.keyboard.press('Escape');
+    await sleep(600);
+  }
+
+  // Style › Manage dimension value colors: the report's value → color table.
+  async readValueColors(): Promise<Record<string, string>> {
+    await this.openTab('Style');
+    const out: Record<string, string> = {};
+    await this.step('read the dimension value colors', async () => {
+      await this.page
+        .locator(SEL.propertiesPanel)
+        .getByText('Manage dimension value colors', { exact: true })
+        .first()
+        .click();
+      await this.page
+        .getByRole('button', { name: 'Add a value button' })
+        .waitFor({ timeout: this.timeoutMs });
+      await sleep(800);
+      const rows = await this.page.evaluate(
+        (sel) =>
+          [...document.querySelectorAll(sel.row)].map((r) => [
+            r.querySelector(sel.value)?.textContent?.trim() ?? '',
+            r.querySelector<HTMLElement>(sel.color)?.style.backgroundColor ?? '',
+          ]),
+        {
+          row: SPEC_SEL.valueColorRow,
+          value: SPEC_SEL.valueColorValue,
+          color: SPEC_SEL.valueColorSwatch,
+        },
+      );
+      for (const [value, color] of rows) {
+        const hex = cssColorToHex(color!);
+        if (value && hex) out[value] = hex;
+      }
+      await this.page.getByRole('button', { name: 'Close', exact: true }).last().click();
+    });
+    await this.settle(600);
+    return out;
+  }
+
+  // Bold, italic, underline and strikethrough of the selected text box: the
+  // pressed state of its format buttons, which apply to the whole box.
+  async readTextFormat(): Promise<{
+    bold: boolean;
+    italic: boolean;
+    underline: boolean;
+    strikethrough: boolean;
+  }> {
+    const pressed = async (icon: string) =>
+      (await this.page
+        .locator(`${SEL.propertiesPanel} ${SEL.iconButton(icon)}`)
+        .first()
+        .getAttribute('aria-pressed', { timeout: 3_000 })
+        .catch(() => null)) === 'true';
+    return {
+      bold: await pressed('format_bold'),
+      italic: await pressed('format_italic'),
+      underline: await pressed('format_underlined'),
+      strikethrough: await pressed('format_strikethrough'),
+    };
+  }
+
+  // The selected image's file name (or the URL it came from) and its bytes,
+  // read from the blob the canvas draws.
+  async readImage(index: number): Promise<{ label: string; type: string; base64: string } | null> {
+    await this.openTab('Setup');
+    const label = (
+      (await this.page
+        .locator(`${SEL.propertiesPanel} ${SPEC_SEL.imageFileLabel}`)
+        .first()
+        .textContent({ timeout: 3_000 })
+        .catch(() => null)) ?? ''
+    ).trim();
+    const data = await this.component(index).evaluate(async (c) => {
+      const src = c.querySelector('img')?.src;
+      if (!src) return null;
+      const blob = await (await fetch(src)).blob();
+      const url = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+      return { type: blob.type, base64: url.slice(url.indexOf(',') + 1) };
+    });
+    return data ? { label, ...data } : null;
+  }
+
+  // A line's color, style and ends: "Stroke color", "Border style" and the two
+  // unlabelled end drop-downs.
+  async readLineStyle(): Promise<{
+    color?: string;
+    borderStyle?: string;
+    start?: string;
+    end?: string;
+  }> {
+    const list = await this.listSettings();
+    const color = cssColorToHex(list.find((s) => s.label === 'Stroke color')?.value ?? '');
+    const borderStyle = list.find((s) => s.label === 'Border style')?.value;
+    const ends = await this.page
+      .locator(`${SEL.propertiesPanel} mat-select`)
+      .filter({ hasText: /^\s*(None|Circle|Diamond|Pointer)\s*$/ })
+      .allTextContents();
+    const [start, end] = ends.map((e) => e.trim());
+    return {
+      ...(color ? { color } : {}),
+      ...(borderStyle ? { borderStyle } : {}),
+      ...(start && start !== 'None' ? { start } : {}),
+      ...(end && end !== 'None' ? { end } : {}),
+    };
   }
 
   // ── Report operations ──

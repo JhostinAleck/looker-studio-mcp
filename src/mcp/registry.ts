@@ -504,7 +504,7 @@ const TOOLS: ToolDef[] = [
     name: 'export_report_spec',
     title: 'Export a report spec',
     description:
-      'Read a report into a JSON spec: name, theme, data sources (table or SQL), pages and, per page, every component with its kind, layout, chart type, fields, title and main style settings. apply_report_spec rebuilds it. Takes a while: it opens each component.',
+      'Read a report into a JSON spec: theme, data sources (table or SQL), parameters, calculated/group/bin fields, blends, report and page settings, and per page every component with its layout, fields, filters, dates, series, reference lines, conditional formatting, value colors and main style settings. With path, writes the spec and its image files there. apply_report_spec rebuilds it. Takes a while: it opens each component.',
     schema: schemas.exportReportSpecSchema,
     write: false,
     run: handleExportReportSpec,
@@ -513,7 +513,7 @@ const TOOLS: ToolDef[] = [
     name: 'apply_report_spec',
     title: 'Build a report from a spec',
     description:
-      'Create a report from a spec (as export_report_spec returns it, or written by hand: see docs/report-spec.md), or with report_id add what an existing report lacks: data sources, pages (by name) and components (by position). Nothing existing is changed or removed. Runs in one editor visit.',
+      'Create a report from a spec (spec, or spec_path as export_report_spec writes it; or written by hand: see docs/report-spec.md), or with report_id add what an existing report lacks: data sources, fields, parameters and blends (by name), pages (by name, with their settings) and components (by position). Nothing existing is changed or removed. Runs in one editor visit.',
     schema: schemas.applyReportSpecSchema,
     write: true,
     run: handleApplyReportSpec,

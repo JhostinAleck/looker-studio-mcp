@@ -50,6 +50,9 @@ export interface TextSpec {
   fontSize?: number;
   color?: string;
   bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strikethrough?: boolean;
   background?: string;
   align?: 'left' | 'center' | 'right';
 }
@@ -81,9 +84,11 @@ export interface ShapeSpec {
 }
 
 export interface ImageSpec {
-  // A local PNG, JPG, GIF or SVG file.
+  // A local PNG, JPG, GIF or SVG file, or the https URL of one with `byUrl`.
   path: string;
   altText?: string;
+  // Insert › Image › By URL: Looker Studio fetches the image and keeps the URL as its name.
+  byUrl?: boolean;
 }
 
 export interface CalculatedFieldSpec {
@@ -355,6 +360,8 @@ export interface ReportRepository {
   dataSourceNames(reportId: string): Promise<string[]>;
   // Reads the whole report back (read only): pages, components, data sources.
   readReport(reportId: string, style: StyleDepth): Promise<ReportSnapshot>;
+  // Field and parameter names of every data source, and the blends' names.
+  fieldNames(reportId: string): Promise<{ fields: Record<string, string[]>; blends: string[] }>;
 
   // ── Report operations ──
   // File › Make a copy; `replacements` reconnect data sources of the copy.
@@ -392,13 +399,40 @@ export type ComponentSnapshot =
       field?: string;
       metric?: string;
       dataSource?: string;
+      // Filters and the date range of the control.
+      data?: DataSettings;
       style?: StyleSettings;
     }
-  | { kind: 'image'; layout: Layout; url?: string; style?: StyleSettings }
-  | { kind: 'line'; layout: Layout; from: { x: number; y: number }; to: { x: number; y: number } }
+  | {
+      kind: 'image';
+      layout: Layout;
+      // The https URL it was inserted "By URL" from, when the panel shows all of it.
+      url?: string;
+      // Otherwise the image itself: Looker Studio keeps every image as an uploaded file.
+      file?: ImageFile;
+      altText?: string;
+      style?: StyleSettings;
+    }
+  | {
+      kind: 'line';
+      layout: Layout;
+      from: { x: number; y: number };
+      to: { x: number; y: number };
+      color?: string;
+      borderStyle?: string;
+      style?: StyleSettings;
+    }
   | { kind: 'embed'; layout: Layout; url?: string; style?: StyleSettings }
-  // Anything else (a blend chart, a community visualization…): kept as its panel title.
+  // Anything else (a community visualization…): kept as its panel title.
   | { kind: 'other'; layout: Layout; panel: string };
+
+export interface ImageFile {
+  // The file name the editor shows (or the URL it came from), e.g. "logo.png".
+  name: string;
+  // MIME type and base64 bytes, read from the canvas.
+  type: string;
+  base64: string;
+}
 
 export interface DataSourceSnapshot {
   name: string;
@@ -406,9 +440,20 @@ export interface DataSourceSnapshot {
   source?: BigQuerySource;
 }
 
+// Fields a data source editor holds beyond the connection's own columns.
+export interface DataSourceFields {
+  dataSource: string;
+  calculatedFields: CalculatedFieldSpec[];
+  parameters: ParameterSpec[];
+  groups: GroupFieldSpec[];
+  bins: BinFieldSpec[];
+}
+
 export interface PageSnapshot {
   name: string;
   components: ComponentSnapshot[];
+  // Page › Current page settings, when anything is set.
+  settings?: ScopeSettings;
 }
 
 export interface ReportSnapshot {
@@ -416,7 +461,13 @@ export interface ReportSnapshot {
   theme?: string;
   canvas?: { width: number; height: number };
   dataSources: DataSourceSnapshot[];
+  fields?: DataSourceFields[];
+  blends?: BlendSpec[];
+  // File › Report settings, when anything is set.
+  settings?: ScopeSettings;
   pages: PageSnapshot[];
+  // What could not be read.
+  notes?: string[];
 }
 
 // How much of each component's Style tab readReport keeps.

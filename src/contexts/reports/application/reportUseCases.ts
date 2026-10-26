@@ -182,6 +182,11 @@ export async function addImage(
   // Size in bytes of the file, or null when there is none.
   sizeOf: (path: string) => number | null = () => 1,
 ): Promise<ComponentInfo> {
+  if (image.byUrl) {
+    if (!/^https:\/\/\S+$/i.test(image.path))
+      throw new InvalidChartError('An image by URL needs an https URL.');
+    return repo.addImage(parseReportId(report), image, checkPlace(opts));
+  }
   if (!IMAGE_RE.test(image.path)) {
     throw new InvalidChartError('The image must be a .png, .jpg, .gif, .svg or .webp file.');
   }
@@ -617,6 +622,13 @@ export async function inOneVisit<T>(
 }
 
 // ── Report specs ──
+
+export async function fieldNames(
+  repo: ReportRepository,
+  report: string,
+): Promise<{ fields: Record<string, string[]>; blends: string[] }> {
+  return repo.fieldNames(parseReportId(report));
+}
 
 export async function readReport(
   repo: ReportRepository,

@@ -22,6 +22,7 @@ export async function handleAddChart(
     ...(input.breakdown ? { breakdown: input.breakdown } : {}),
     ...(input.sort_by ? { sortBy: input.sort_by } : {}),
     ...(input.title ? { title: input.title } : {}),
+    ...(input.labels ? { labels: input.labels } : {}),
     ...toDataSettings(input),
   };
   const of = chart.metrics.length ? ` of ${chart.metrics.map((m) => m.field).join(', ')}` : '';
