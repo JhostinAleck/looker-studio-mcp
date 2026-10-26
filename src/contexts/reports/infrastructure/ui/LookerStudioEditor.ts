@@ -34,6 +34,7 @@ import {
 type FilterClauseInput = FilterClause;
 import { InfrastructureError } from '@/shared-kernel/errors/InfrastructureError.js';
 
+import { NetworkActivity } from './NetworkActivity.js';
 import {
   BASE,
   CHECK,
@@ -107,6 +108,9 @@ interface ConsentState {
 }
 const consentByTab = new WeakMap<Page, ConsentState>();
 
+// Also per tab: listeners stay on the page across the editors of a batch.
+const networkByTab = new WeakMap<Page, NetworkActivity<Request>>();
+
 function parseLayout(style: string): Layout {
   const read = (prop: string): number => {
     const match = new RegExp(`(?:^|;)\\s*${prop}:\\s*(-?[\\d.]+)px`).exec(style);
@@ -121,7 +125,10 @@ export class LookerStudioEditor {
   constructor(
     readonly page: Page,
     private readonly timeoutMs: number,
-  ) {}
+  ) {
+    // Before the first navigation, so the requests of the page load count too.
+    this.trackNetwork();
+  }
 
   // ── Navigation ──────────────────────────────────────────────────────────
 
@@ -211,12 +218,23 @@ export class LookerStudioEditor {
     return /\/reporting\/([0-9a-f-]{36})/i.exec(this.page.url())?.[1] ?? null;
   }
 
-  // Waits for the editor to finish the network work of the last action (autosave included).
+  // Waits for the editor to finish the network work of the last action
+  // (autosave included), and at least `ms` in all for the UI to catch up: the
+  // time spent waiting for the network counts, but the UI always gets 200 ms
+  // after it.
   async settle(ms = 800): Promise<void> {
-    if (this.network) await this.networkQuiet(5_000);
-    else await this.page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
-    await sleep(ms);
+    const start = Date.now();
+    await this.networkQuiet(5_000);
+    await sleep(Math.max(ms - (Date.now() - start), Math.min(ms, 200)));
     if (consentByTab.has(this.page)) await this.answerConsent().catch(() => false);
+  }
+
+  // Before the tab closes: autosave may start a moment after the last change,
+  // so wait for the network twice around a pause.
+  async settleBeforeClose(): Promise<void> {
+    await this.networkQuiet(5_000);
+    await sleep(1500);
+    await this.settle(0);
   }
 
   async step<T>(what: string, work: () => Promise<T>): Promise<T> {
@@ -661,10 +679,14 @@ export class LookerStudioEditor {
   private async pickTable(projectId: string, datasetId: string, tableId: string): Promise<void> {
     const manual = this.page.getByPlaceholder('Enter Project Id manually');
     await manual.waitFor({ timeout: this.timeoutMs });
+    // An Enter while the connector still loads its project lists can leave
+    // the dataset list spinning for good.
+    await this.settle(0);
     await manual.fill(projectId);
     await manual.press('Enter');
     // The dataset list sometimes never loads after the first Enter: ask again.
     await this.clickVisibleText(datasetId, this.timeoutMs / 2).catch(async () => {
+      await this.settle(0);
       await manual.fill('');
       await manual.fill(projectId);
       await manual.press('Enter');
@@ -2301,37 +2323,25 @@ export class LookerStudioEditor {
       .map((s) => (s.section ? `${s.section}: ${s.field}` : s.field!));
   }
 
-  // ── Batch: network quiet ───────────────────────────────────────────────
+  // ── Network quiet ──────────────────────────────────────────────────
 
-  private network: { last: number; inflight: Set<Request> } | null = null;
-
-  // The editor keeps a Firestore listen channel open, so 'networkidle' never
-  // comes and every settle() waited its whole 5 s timeout. Once tracked, the
-  // wait ends when no request has started or finished for 500 ms.
-  trackNetwork(): void {
-    if (this.network) return;
-    const network = { last: Date.now(), inflight: new Set<Request>() };
-    const longLived = (r: Request) => /firestore\.googleapis\.com.*\/Listen\//.test(r.url());
-    this.page.on('request', (r) => {
-      if (longLived(r)) return;
-      network.inflight.add(r);
-      network.last = Date.now();
-    });
-    const done = (r: Request) => {
-      if (network.inflight.delete(r)) network.last = Date.now();
-    };
-    this.page.on('requestfinished', done);
-    this.page.on('requestfailed', done);
-    this.network = network;
+  // settle() waits for this instead of 'networkidle', which never comes in the
+  // editor (see NetworkActivity).
+  private trackNetwork(): void {
+    if (networkByTab.has(this.page)) return;
+    const network = new NetworkActivity<Request>();
+    this.page.on('request', (r) =>
+      network.started(r, { url: r.url(), method: r.method(), resourceType: r.resourceType() }),
+    );
+    this.page.on('requestfinished', (r) => network.ended(r));
+    this.page.on('requestfailed', (r) => network.ended(r));
+    networkByTab.set(this.page, network);
   }
 
   private async networkQuiet(timeoutMs: number): Promise<void> {
+    const network = networkByTab.get(this.page)!;
     const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const n = this.network!;
-      if (n.inflight.size === 0 && Date.now() - n.last >= 500) return;
-      await sleep(100);
-    }
+    while (Date.now() < deadline && !network.isQuiet(500)) await sleep(100);
   }
 
   // ── Report specs: reading the editor ───────────────────────────────────
