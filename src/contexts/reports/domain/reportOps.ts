@@ -1,14 +1,14 @@
 import type { BigQuerySource } from './Report.js';
-import { InvalidChartError } from './Report.js';
+import { InvalidChartError, validateDateRange } from './Report.js';
 
 // Report-level operations of the Looker Studio editor: copies, link sharing,
 // scheduled email delivery, version history and embedding.
 
-// Make a copy: a data source of the original (by name) gets a new connection in the copy.
-export interface DataSourceReplacement {
-  original: string;
-  source: BigQuerySource;
-}
+// Make a copy: a data source of the original (by name) gets a new connection
+// in the copy, or is swapped for a reusable data source of the account (by
+// name, picked in the copy dialog itself).
+export type DataSourceReplacement =
+  { original: string; source: BigQuerySource } | { original: string; reusable: string };
 
 export interface CopiedReport {
   id: string;
@@ -42,10 +42,46 @@ export interface DeliverySchedule {
   // weekly and monthly follow the start date (weekly on its weekday,
   // monthly on the same week and weekday of the month).
   repeat?: Repeat;
-  // repeat: custom — every `interval` days, weeks or months.
-  every?: { interval: number; unit: 'day' | 'week' | 'month' };
+  // repeat: custom — every `interval` days, weeks or months. Weeks go out on
+  // `weekdays` (the start date's weekday when omitted); months on the start
+  // date's day of the month or on its weekday ("the last Tuesday").
+  every?: {
+    interval: number;
+    unit: 'day' | 'week' | 'month';
+    weekdays?: Weekday[];
+    monthlyOn?: 'day' | 'weekday';
+  };
   // Page names; all pages when omitted.
   pages?: string[];
+  // IANA zone (e.g. "Europe/Madrid"). A schedule keeps the zone it was created
+  // in, the browser's: setting one recreates the schedule in that zone.
+  timeZone?: string;
+  // The Filters tab: values of the report's filter controls for the email.
+  filters?: DeliveryFilter[];
+}
+
+export const WEEKDAYS = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+
+// One filter control of the Filters tab, found by page and field (or the
+// page's date range control). `index` picks among controls on the same field.
+export interface DeliveryFilter {
+  page?: string;
+  field?: string;
+  index?: number;
+  // Drop-down and list controls: the values to keep (empty: all of them);
+  // input boxes: one value (empty: cleared).
+  values?: string[];
+  // Date range controls: a preset ("Last 28 days") or YYYY-MM-DD..YYYY-MM-DD.
+  dateRange?: string;
 }
 
 // What the Schedule delivery dialog shows for a scheduled report, by label
@@ -129,6 +165,97 @@ export function validateSchedule(schedule: DeliverySchedule): void {
   if (schedule.pages && !schedule.pages.length) {
     throw new InvalidChartError('pages needs at least one page name; omit it for all pages.');
   }
+  const every = schedule.every;
+  if (every?.weekdays && every.unit !== 'week')
+    throw new InvalidChartError('weekdays only applies to every.unit: week.');
+  if (every?.weekdays && !every.weekdays.length)
+    throw new InvalidChartError('weekdays needs at least one day; omit it for the start date.');
+  if (every?.monthlyOn && every.unit !== 'month')
+    throw new InvalidChartError('monthly_on only applies to every.unit: month.');
+  if (schedule.timeZone !== undefined) timeZoneOffset(schedule.timeZone);
+  for (const filter of schedule.filters ?? []) validateDeliveryFilter(filter);
+}
+
+function validateDeliveryFilter(filter: DeliveryFilter): void {
+  const field = filter.field?.trim();
+  if (!field === (filter.dateRange === undefined)) {
+    throw new InvalidChartError(
+      'Each filter names a control field (with values) or sets date_range (the date range control), not both.',
+    );
+  }
+  if (field && !filter.values) throw new InvalidChartError(`The filter on ${field} needs values.`);
+  if (!field && filter.values)
+    throw new InvalidChartError('values belong to a field filter, not a date range.');
+  if (filter.dateRange !== undefined) validateDateRange(filter.dateRange);
+  if (filter.index !== undefined && (!Number.isInteger(filter.index) || filter.index < 1))
+    throw new InvalidChartError('A filter index is 1 or more.');
+}
+
+// The zone's current offset as Looker Studio's time zone labels write it
+// ("GMT+05:30", "GMT-05:00", "GMT+00:00").
+export function timeZoneOffset(timeZone: string, at: Date = new Date()): string {
+  let name: string | undefined;
+  try {
+    name = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
+      .formatToParts(at)
+      .find((p) => p.type === 'timeZoneName')?.value;
+  } catch {
+    throw new InvalidChartError(
+      `time_zone must be an IANA time zone such as Europe/Madrid or America/New_York, not "${timeZone}".`,
+    );
+  }
+  return !name || name === 'GMT' ? 'GMT+00:00' : name;
+}
+
+// A filter control of the schedule's Filters tab, as read from the dialog.
+export interface DeliveryControl {
+  page: string;
+  // The field it filters ("" for a date range control).
+  field: string;
+  kind: 'list' | 'input' | 'date' | 'other';
+  // What it shows: "feature: a, b (2)", "platform (Equals)", "Sep 28, 2026 - Oct 25, 2026".
+  text: string;
+  value?: string;
+}
+
+// The control a filter sets, and its position among its page's controls.
+export function pickDeliveryControl(
+  controls: DeliveryControl[],
+  filter: DeliveryFilter,
+): { page: string; position: number; control: DeliveryControl } {
+  const what = filter.dateRange !== undefined ? 'date range control' : `control on ${filter.field}`;
+  const listed = () =>
+    controls
+      .map((c) => `${c.page} › ${c.kind === 'date' ? 'date range' : c.field} (${c.kind})`)
+      .join(', ') || 'none';
+  const matches = controls
+    .map((control, i) => ({ control, i }))
+    .filter(({ control }) =>
+      filter.dateRange !== undefined
+        ? control.kind === 'date'
+        : control.field.toLowerCase() === filter.field!.trim().toLowerCase(),
+    )
+    .filter(({ control }) => !filter.page || control.page === filter.page.trim());
+  if (!matches.length) {
+    throw new InvalidChartError(
+      `No ${what}${filter.page ? ` on the page ${filter.page}` : ''} in the schedule's Filters tab (it has: ${listed()}).`,
+    );
+  }
+  const pages = [...new Set(matches.map((m) => m.control.page))];
+  if (pages.length > 1) {
+    throw new InvalidChartError(`Several pages have a ${what} (${pages.join(', ')}): pass page.`);
+  }
+  if (matches.length > 1 && filter.index === undefined) {
+    throw new InvalidChartError(
+      `The page ${pages[0]} has ${matches.length} ${what}s (${matches.map((m) => m.control.kind).join(', ')}): pass index (1-${matches.length}).`,
+    );
+  }
+  const chosen = matches[(filter.index ?? 1) - 1];
+  if (!chosen) {
+    throw new InvalidChartError(`index ${filter.index} is past the ${matches.length} ${what}s.`);
+  }
+  const position = controls.slice(0, chosen.i).filter((c) => c.page === chosen.control.page).length;
+  return { page: chosen.control.page, position, control: chosen.control };
 }
 
 // A version by its 1-based index or its label (name or date as listed).

@@ -654,6 +654,8 @@ export async function copyReport(
   if (!trimmed) throw new InvalidChartError('Give the copy a name.');
   const originals = replacements.map((r) => r.original.trim());
   if (originals.some((o) => !o)) throw new InvalidChartError('Name the data source to replace.');
+  if (replacements.some((r) => 'reusable' in r && !r.reusable.trim()))
+    throw new InvalidChartError('Name the reusable data source to use.');
   const twice = originals.filter((o, i) => originals.indexOf(o) !== i);
   if (twice.length) {
     throw new InvalidChartError(`Data sources replaced twice: ${[...new Set(twice)].join(', ')}.`);

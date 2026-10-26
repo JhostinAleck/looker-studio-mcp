@@ -9,6 +9,7 @@ import {
   isUsed,
   parseConnectionChanges,
   parseConsoleLink,
+  parseFreshness,
   validateDataSourceChange,
   validateFieldChange,
 } from '@/contexts/reports/domain/DataSource.js';
@@ -93,6 +94,22 @@ describe('data sources', () => {
       name: 'Sales',
       freshness: '1 hour',
     });
+  });
+
+  it('parses presets and custom data freshness periods', () => {
+    expect(parseFreshness('4 hours')).toEqual({ preset: '4 hours' });
+    expect(parseFreshness('1 hour')).toEqual({ preset: '1 hour' });
+    expect(parseFreshness('30 minutes')).toEqual({ custom: { amount: 30, unit: 'minutes' } });
+    expect(parseFreshness('every 2 hours')).toEqual({ custom: { amount: 2, unit: 'hours' } });
+    expect(() => parseFreshness('1 day')).toThrow(/12 hours/);
+    expect(() => parseFreshness('13 hours')).toThrow(InvalidChartError);
+    expect(() => parseFreshness('7 minutes')).toThrow(/7 minutes/);
+    expect(() => parseFreshness('soon')).toThrow(InvalidChartError);
+    expect(validateDataSourceChange({ freshness: '2 h' })).toEqual({ freshness: '2 hours' });
+    expect(validateDataSourceChange({ makeReusable: true })).toEqual({ makeReusable: true });
+    expect(() => validateDataSourceChange({ name: 'x', grantEditorAccess: false })).toThrow(
+      /make_reusable/,
+    );
   });
 
   it('validates field changes and splits type paths', () => {

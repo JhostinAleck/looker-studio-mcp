@@ -46,7 +46,12 @@ export interface DataSourceChange {
   // Custom queries only: the new SQL, applied with Reconnect.
   sql?: string;
   credentials?: Credentials;
-  freshness?: Freshness;
+  // A preset (FRESHNESS) or a custom period such as "30 minutes" or "2 hours".
+  freshness?: string;
+  // Resource › Manage added data sources › Make reusable.
+  makeReusable?: boolean;
+  // The Make reusable dialog's "Grant report editors access" (on by default).
+  grantEditorAccess?: boolean;
 }
 
 export const FIELD_AGGREGATIONS = [...AGGREGATIONS, 'median', 'std_dev', 'variance'] as const;
@@ -130,10 +135,12 @@ export function parseConsoleLink(href: string): {
 }
 
 export function validateDataSourceChange(change: DataSourceChange): DataSourceChange {
-  const { name, sql, credentials, freshness } = change;
-  if (name === undefined && sql === undefined && !credentials && !freshness) {
-    throw new InvalidChartError('Pass name, sql, credentials or freshness.');
+  const { name, sql, credentials, freshness, makeReusable, grantEditorAccess } = change;
+  if (name === undefined && sql === undefined && !credentials && !freshness && !makeReusable) {
+    throw new InvalidChartError('Pass name, sql, credentials, freshness or make_reusable.');
   }
+  if (grantEditorAccess !== undefined && !makeReusable)
+    throw new InvalidChartError('grant_editor_access only applies with make_reusable: true.');
   if (name !== undefined && !name.trim())
     throw new InvalidChartError('The data source name cannot be empty.');
   if (sql !== undefined && !sql.trim()) throw new InvalidChartError('The SQL cannot be empty.');
@@ -141,8 +148,52 @@ export function validateDataSourceChange(change: DataSourceChange): DataSourceCh
   if (name !== undefined) out.name = name.trim();
   if (sql !== undefined) out.sql = sql.trim();
   if (credentials) out.credentials = credentials;
-  if (freshness) out.freshness = freshness;
+  if (freshness) out.freshness = freshnessLabel(parseFreshness(freshness));
+  if (makeReusable) out.makeReusable = true;
+  if (grantEditorAccess !== undefined) out.grantEditorAccess = grantEditorAccess;
   return out;
+}
+
+// ── data freshness ──
+// The Data freshness dialog has four presets and "Custom": every N minutes
+// (from a fixed list) or 1 to 12 hours. It offers nothing longer.
+export const CUSTOM_FRESHNESS = {
+  minutes: [1, 2, 3, 4, 5, 10, 15, 20, 25, 30, 40, 50],
+  hours: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+} as const;
+
+export type FreshnessSetting =
+  { preset: Freshness } | { custom: { amount: number; unit: 'minutes' | 'hours' } };
+
+export function parseFreshness(input: string): FreshnessSetting {
+  const text = input.trim().toLowerCase();
+  const match = /^(?:every\s+)?(\d+)\s*(m|mins?|minutes?|h|hrs?|hours?|d|days?)$/.exec(text);
+  const allowed = `a preset (${FRESHNESS.join(', ')}) or every ${CUSTOM_FRESHNESS.minutes.join(', ')} minutes or 1 to 12 hours`;
+  if (!match) throw new InvalidChartError(`freshness must be ${allowed}, not "${input}".`);
+  const amount = Number(match[1]);
+  const unit = match[2]!.startsWith('m') ? 'minutes' : match[2]!.startsWith('h') ? 'hours' : 'days';
+  if (unit === 'days') {
+    throw new InvalidChartError(
+      `Looker Studio's Data freshness has no days: the longest period is 12 hours. Use ${allowed}.`,
+    );
+  }
+  const preset = FRESHNESS.find(
+    (p) => p === `${amount} ${unit}` || p === `${amount} ${unit.slice(0, -1)}`,
+  );
+  if (preset) return { preset };
+  if (!(CUSTOM_FRESHNESS[unit] as readonly number[]).includes(amount)) {
+    throw new InvalidChartError(
+      `Data freshness cannot be every ${amount} ${unit}: use ${allowed}.`,
+    );
+  }
+  return { custom: { amount, unit } };
+}
+
+// "30 minutes", "1 hour", "2 hours": what the editor's header button shows.
+export function freshnessLabel(setting: FreshnessSetting): string {
+  if ('preset' in setting) return setting.preset;
+  const { amount, unit } = setting.custom;
+  return `${amount} ${amount === 1 ? unit.slice(0, -1) : unit}`;
 }
 
 export function validateFieldChange(field: string, change: FieldChange): FieldChange {

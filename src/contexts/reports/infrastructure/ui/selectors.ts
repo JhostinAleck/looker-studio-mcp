@@ -143,6 +143,38 @@ export const CONTROL_LABELS: Record<ControlKind, string> = {
   button: 'Button',
 };
 
+// ── Control variants ──
+
+// The drop-down, fixed-size list, input box, advanced filter, slider and
+// checkbox all open "Drop-down list properties", and a preset filter is a button whose action is
+// Filter ("Button properties"). What the control draws, and the button's
+// action, tell them apart. First match wins.
+export const DROP_DOWN_VARIANTS: ReadonlyArray<readonly [ControlKind, string]> = [
+  ['fixed_size_list', 'list-control'],
+  ['advanced_filter', 'input.advanced-filter-text-box'],
+  ['input_box', 'input.simple-text-box'],
+  ['slider', 'lego-slider'],
+  ['checkbox', 'checkbox-control'],
+];
+export const PRESET_FILTER_ACTION = 'Filter';
+
+// The panel title of the control a component really is. `drawn` lists the
+// DROP_DOWN_VARIANTS selectors found in it; `buttonAction` is the checked
+// "Button action type".
+export function controlPanelTitle(
+  title: string,
+  drawn: readonly string[],
+  buttonAction: string | null,
+): string {
+  const of = (kind: ControlKind) => `${CONTROL_LABELS[kind]} properties`;
+  if (title === of('drop_down')) {
+    const variant = DROP_DOWN_VARIANTS.find(([, css]) => drawn.includes(css));
+    return variant ? of(variant[0]) : title;
+  }
+  if (title === of('button') && buttonAction === PRESET_FILTER_ACTION) return of('preset_filter');
+  return title;
+}
+
 // The date picker's preset menu: these presets sit in a submenu named after
 // its first entry; the rest are top-level items.
 export const DATE_PRESET_GROUPS: Record<string, string[]> = {
@@ -216,7 +248,8 @@ export const SECTION = {
   metrics: /^(Metric|Primary field)/,
   breakdown: /^Breakdown dimension$/,
   sort: /^Sort( #1)?$/,
-  control: /^Control field$/,
+  // A dimension control calls its slot "Dimension".
+  control: /^(Control field|Dimension)$/,
 } as const;
 
 // A Setup slot named by the caller, matched whole and case-insensitively.
@@ -329,6 +362,11 @@ export const PAGE_MENU: Record<Exclude<PageAction, 'hide' | 'show'>, string> = {
 export const SEL = {
   canvas: '.reportArea',
   component: '.lego-component-repeat',
+  // A click on a drop-down in the editor opens its value list on <body>, drawn
+  // over the control itself; an advanced filter opens its condition menu and a
+  // data control its data source menu (an md-panel).
+  controlPopup:
+    'canvas-control-editor, .md-select-menu-container.md-active, .md-panel-outer-wrapper',
   propertiesPanel: 'properties-panel article.property-panel',
   // Page names in the Page › Manage pages panel.
   pageChip: '.nav-item-chip.page-chip .chip-text',
@@ -438,6 +476,11 @@ export const CHECK = {
   // and an error id.
   errorDialog: 'md-dialog.errorDialog',
   dialogParts: 'p.errorMessage, .error-code-block, .error-id p',
+  // Vega charts (bar, column, line, area…) draw in an iframe and show empty
+  // axes, not "No data", for no rows. Their root group appears once drawn; the
+  // hover target marks hold one item per data point.
+  vegaRoot: '.role-frame.root',
+  vegaPoints: '.role-mark.hoverTarget',
 } as const;
 
 // ── data sources ──
@@ -459,6 +502,15 @@ export const DATA_SOURCE = {
   openMenu: '.md-open-menu-container',
   // The Data freshness dialog is an AngularJS md-dialog, not a mat-dialog.
   freshnessDialog: 'md-dialog.set-query-cache-policy-dialog',
+  // Its "Custom" period: two AngularJS md-selects (amount, then minutes/hours).
+  freshnessAmount: 'md-select.custom-cache-period-amount',
+  freshnessUnit: 'md-select.custom-cache-chrono-unit',
+  openSelectMenu: '.md-select-menu-container.md-active',
+  freshnessCustom: 'Custom',
+  // Manage added data sources › Make reusable asks in a mat-dialog.
+  makeReusableButton: /^make reusable$/i,
+  makeReusableDialog: 'Make this data source reusable',
+  grantEditorAccess: 'Grant report editors access',
   selectedOption: 'ng2-config-column-item:has(.list-option.selected) a[href]',
 } as const;
 
@@ -571,6 +623,12 @@ export const REPORT_OPS = {
   legacyDialog: 'md-dialog',
   copyDialogTitle: 'Copy this report',
   copyButton: 'Copy Report',
+  // Its rows: the original's data source, then the "New Data Source" picker,
+  // whose menu lists added and available (reusable) data sources.
+  copySourceRow: '.datasource-item-repeat',
+  copySourcePicker: 'datasource-selector-button',
+  copySourceName: '.datasource-name-label',
+  copySourceOption: '.datasource-option',
   // The copy form posts with an xsrf field the dialog leaves empty here; the
   // token is the RAP_XSRF_TOKEN cookie.
   copyXsrfInput: 'md-dialog input[name=xsrf]',
@@ -590,6 +648,28 @@ export const REPORT_OPS = {
   scheduled: 'This report is scheduled',
   editSchedule: 'Edit schedule',
   deleteSchedule: 'Delete schedule',
+  // Repeat › Custom: "Every [n] [day|week|month on the 27th day|month on the
+  // last Tuesday]", and for weeks "On" checkboxes with the day as id.
+  everyAmount: 'input[formcontrolname=amount]',
+  weekdayBoxes: '.day-checkbox-container input[type=checkbox]',
+  // The Filters tab: an expansion panel per page with its filter controls.
+  filtersTab: 'Filters',
+  filtersLoaded: 'schedule-filters mat-accordion.filters-loaded',
+  filterPanel: 'schedule-filters mat-expansion-panel',
+  filterControl: 'ng2-canvas-component',
+  dateControl: '.simple-daterangepicker',
+  listButton: 'button[aria-label="Open data control menu"]',
+  // A drop-down/list control's menu (AngularJS, outside the dialog).
+  listMenu: '.list-control-container',
+  listSearch: 'input[placeholder="Type to search"]',
+  listSelectAll: '.header md-checkbox',
+  listItemMulti: '.item-multi',
+  listItemSingle: '.item-single',
+  listValueMulti: '.md-label span',
+  listValueSingle: '.dimension-value',
+  listBackdrops: ['.lego-overlay-transparent-backdrop', '.popup-backdrop'],
+  // A date range control's picker, over the dialog.
+  datePopup: '.cdk-overlay-connected-position-bounding-box',
   // Rows of File › Version history (virtual-scrolled).
   versionItem: '.revision-item',
   versionName: 'input[aria-label="Revision name"], .revision-item-text-box',
@@ -601,3 +681,15 @@ export const REPORT_OPS = {
   embedEnable: 'Enable embedding',
   embedNavigation: 'Show report navigation in embedded mode',
 } as const;
+
+// Repeat › Custom › Every: "day", "week", "month on the 27th day" or "month
+// on the last Tuesday" (plural once the interval is above 1).
+export function scheduleEveryOption(
+  unit: 'day' | 'week' | 'month',
+  monthlyOn: 'day' | 'weekday' = 'day',
+): RegExp {
+  if (unit !== 'month') return new RegExp(`^\\s*${unit}s?\\s*$`, 'i');
+  return monthlyOn === 'day'
+    ? /^\s*months? on the \d+\w* day\s*$/i
+    : /^\s*months? on the \S+ (sun|mon|tues|wednes|thurs|fri|satur)day\s*$/i;
+}

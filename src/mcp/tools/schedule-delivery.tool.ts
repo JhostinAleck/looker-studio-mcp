@@ -15,8 +15,29 @@ export async function handleScheduleDelivery(
     ...(input.start_date ? { startDate: input.start_date } : {}),
     ...(input.time ? { time: input.time } : {}),
     ...(input.repeat ? { repeat: input.repeat } : {}),
-    ...(input.every ? { every: input.every } : {}),
+    ...(input.every
+      ? {
+          every: {
+            interval: input.every.interval,
+            unit: input.every.unit,
+            ...(input.every.weekdays ? { weekdays: input.every.weekdays } : {}),
+            ...(input.every.monthly_on ? { monthlyOn: input.every.monthly_on } : {}),
+          },
+        }
+      : {}),
     ...(input.pages ? { pages: input.pages } : {}),
+    ...(input.time_zone ? { timeZone: input.time_zone } : {}),
+    ...(input.filters
+      ? {
+          filters: input.filters.map((f) => ({
+            ...(f.page ? { page: f.page } : {}),
+            ...(f.field ? { field: f.field } : {}),
+            ...(f.index ? { index: f.index } : {}),
+            ...(f.values ? { values: f.values } : {}),
+            ...(f.date_range ? { dateRange: f.date_range } : {}),
+          })),
+        }
+      : {}),
   };
   const who = ['the signed-in account', ...input.recipients].join(', ');
   return runWrite(

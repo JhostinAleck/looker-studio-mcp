@@ -41,11 +41,13 @@ import {
   BASE,
   CHECK,
   COMMUNITY_SEL,
+  CONTROL_LABELS,
   CONNECTOR_SEL,
   CUSTOM_QUERY_OPTIONS,
   DB_CERTIFICATE_HINT,
   DB_CLIENT_AUTH_LABEL,
   DB_SSL_LABEL,
+  DROP_DOWN_VARIANTS,
   HL,
   PRESET_ORDER,
   REPORT_CONSENT,
@@ -54,6 +56,7 @@ import {
   SHEETS_URL_OPTION,
   SPEC_SEL,
   conditionAlias,
+  controlPanelTitle,
   cssEscape,
   datePresetPath,
   escapeRegExp,
@@ -378,18 +381,22 @@ export class LookerStudioEditor {
 
   // A screen point inside the component that no other component covers.
   private async clickablePoint(index: number): Promise<{ x: number; y: number }> {
-    const point = await this.component(index).evaluate((target) => {
-      const r = target.getBoundingClientRect();
-      for (const fy of [0.5, 0.15, 0.85, 0.3, 0.7]) {
-        for (const fx of [0.5, 0.1, 0.9, 0.3, 0.7]) {
-          const x = r.x + r.width * fx;
-          const y = r.y + r.height * fy;
-          const hit = document.elementFromPoint(x, y);
-          if (hit && hit.closest('.lego-component-repeat') === target) return { x, y };
+    const point = await this.component(index).evaluate(
+      (target, { component, details }) => {
+        const r = target.getBoundingClientRect();
+        for (const fy of [0.5, 0.15, 0.85, 0.3, 0.7]) {
+          for (const fx of [0.5, 0.1, 0.9, 0.3, 0.7]) {
+            const x = r.x + r.width * fx;
+            const y = r.y + r.height * fy;
+            const hit = document.elementFromPoint(x, y);
+            // An error card's "See details" link opens a dialog over the editor.
+            if (hit && hit.closest(component) === target && !hit.closest(details)) return { x, y };
+          }
         }
-      }
-      return null;
-    });
+        return null;
+      },
+      { component: SEL.component, details: `${CHECK.error} ${CHECK.detailsLink}` },
+    );
     if (!point)
       throw new EditorStepError(`component ${index} is fully covered by other components`);
     return point;
@@ -417,6 +424,7 @@ export class LookerStudioEditor {
       await unblock();
     }
     await sleep(700);
+    await this.closeOverlays();
     if (!(await this.panelTitle()) && (await this.component(index).locator('iframe').count())) {
       // Last resort: a selection box dragged from the empty canvas. It also
       // takes any component lying inside the box.
@@ -428,7 +436,34 @@ export class LookerStudioEditor {
       await sleep(700);
     }
     await this.closeDatePopup();
-    return this.panelTitle();
+    return this.controlTitle(index, await this.panelTitle());
+  }
+
+  // Several controls share a panel title: name the one this component is.
+  private async controlTitle(index: number, title: string): Promise<string> {
+    if (title === `${CONTROL_LABELS.drop_down} properties`) {
+      const drawn = await this.component(index)
+        .evaluate(
+          (c, variants) => variants.filter((css) => c.querySelector(css)),
+          DROP_DOWN_VARIANTS.map(([, css]) => css),
+        )
+        .catch(() => []);
+      return controlPanelTitle(title, drawn, null);
+    }
+    if (title === `${CONTROL_LABELS.button} properties`) {
+      const action = await this.page
+        .locator(SEL.propertiesPanel)
+        .first()
+        .evaluate((panel) => {
+          const checked = [...panel.querySelectorAll('mat-radio-button')].find(
+            (r) => r.querySelector<HTMLInputElement>('input')?.checked,
+          );
+          return checked?.textContent?.trim() ?? null;
+        })
+        .catch(() => null);
+      return controlPanelTitle(title, [], action);
+    }
+    return title;
   }
 
   // Lets clicks and drags through the canvas iframes until the returned
@@ -464,10 +499,52 @@ export class LookerStudioEditor {
         const point = await this.clickablePoint(index);
         await this.page.mouse.click(point.x, point.y);
         await sleep(400);
+        await this.closeOverlays();
       }
     } finally {
       await this.page.keyboard.up('Shift');
     }
+  }
+
+  // ── Overlays a selecting click opens ──
+
+  // A click on a component can open something over it: a button's link menu
+  // (on a backdrop that takes the next click, the Delete key included), a
+  // control's value list or menu, an error card's details dialog. They hide
+  // the component from clickablePoint ("fully covered") and take the next
+  // keys: close them, keeping the selection.
+  private async closeOverlays(): Promise<void> {
+    const error = this.page.locator(CHECK.errorDialog).last();
+    if (await error.isVisible().catch(() => false)) {
+      await error
+        .getByRole('button', { name: /^ok$/i })
+        .click()
+        .catch(() => this.page.keyboard.press('Escape'));
+      await sleep(400);
+    }
+    await this.closeBackdrop();
+    // Lists drawn inside the component (fixed-size list) are the control itself.
+    const open = () =>
+      this.page.evaluate(
+        ({ popup, component }) =>
+          [...document.querySelectorAll(popup)].some(
+            (e) => !e.closest(component) && e.getBoundingClientRect().height > 0,
+          ),
+        { popup: SEL.controlPopup, component: SEL.component },
+      );
+    // Escape closes the list and keeps the control selected.
+    for (let i = 0; i < 3 && (await open()); i++) {
+      await this.page.keyboard.press('Escape');
+      await sleep(400);
+    }
+    // A click on an input box or advanced filter focuses its text box or
+    // condition, which would take Delete and the arrows: blur it, the control
+    // stays selected.
+    await this.page.evaluate((component) => {
+      const focused = document.activeElement;
+      const field = focused instanceof HTMLElement && focused.matches('input, textarea, md-select');
+      if (field && focused.closest(component)) focused.blur();
+    }, SEL.component);
   }
 
   // A selected button opens a link menu over a transparent backdrop that
@@ -618,6 +695,7 @@ export class LookerStudioEditor {
         await this.page.mouse.move(end.x, end.y, { steps: 15 });
         await this.page.mouse.up();
         await sleep(400);
+        await this.closeOverlays();
         const after = (await this.layouts())[index]!;
         const movedX = after.x - before.x;
         const movedY = after.y - before.y;
@@ -1088,6 +1166,26 @@ export class LookerStudioEditor {
       await this.pickInDatePopup(path, fixed ? [fixed[1]!, fixed[2]!] : undefined);
     });
     await this.settle(500);
+  }
+
+  // A date picker popup that is already open (e.g. a date range control
+  // clicked outside the canvas): picks the preset or fixed range and applies.
+  async pickDateRange(range: string): Promise<void> {
+    const fixed = FIXED_RANGE_RE.exec(range.trim());
+    await this.pickInDatePopup(
+      fixed ? ['Fixed'] : datePresetPath(range),
+      fixed ? [fixed[1]!, fixed[2]!] : undefined,
+    );
+    // An Apply clicked while the preset menu closes can go missing.
+    const apply = this.page
+      .locator('.cdk-overlay-container')
+      .getByRole('button', { name: 'Apply', exact: true });
+    if (await apply.isVisible().catch(() => false)) {
+      await apply.last().click();
+      await sleep(600);
+    }
+    if (await apply.isVisible().catch(() => false))
+      throw new Error('the date picker did not close');
   }
 
   // "Previous period", "Previous year" or "None".
@@ -2318,6 +2416,33 @@ export class LookerStudioEditor {
       await this.answerConsent().catch(() => false);
       const states = await this.componentStates();
       if (!states.some((s) => s.loading) || Date.now() > deadline) return states;
+      await sleep(500);
+    }
+  }
+
+  // Data points a Vega chart drew (see CHECK.vegaRoot), polled until it is
+  // drawn; undefined for charts without an iframe or hover targets, or not
+  // drawn in time. Its iframe is a sandboxed frame Playwright can still read.
+  async vegaPoints(index: number, timeoutMs: number): Promise<number | undefined> {
+    const iframe = this.component(index).locator('iframe').first();
+    if (!(await iframe.count())) return undefined;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const handle = await iframe.elementHandle({ timeout: 1_000 }).catch(() => null);
+      const frame = handle ? await handle.contentFrame().catch(() => null) : null;
+      const frames = frame ? [frame, ...frame.childFrames()] : [];
+      for (const f of frames) {
+        // The frame navigates while it loads: an evaluate can fail, retry.
+        const points = await f
+          .evaluate((c) => {
+            if (!document.querySelector(c.vegaRoot)) return null;
+            const marks = [...document.querySelectorAll(c.vegaPoints)];
+            return marks.length ? marks.reduce((n, m) => n + m.childElementCount, 0) : -1;
+          }, CHECK)
+          .catch(() => null);
+        if (points !== null) return points < 0 ? undefined : points;
+      }
+      if (Date.now() > deadline) return undefined;
       await sleep(500);
     }
   }
