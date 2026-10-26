@@ -3348,7 +3348,8 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       )?.value;
       return withStyle(
         { kind: 'embed' as const, layout, ...(url ? { url } : {}) },
-        await readStyle(),
+        // With style "all" the URL box shows up in the list too: it is `url` already.
+        await readStyle([EMBED_URL_LABEL]),
       );
     }
     return { kind: 'other', layout, panel: panel.replace(/ properties$/i, '') };
@@ -3775,15 +3776,17 @@ export class LookerStudioUiReportRepository implements ReportRepository {
 
   // In Resource › Manage blends: the name of each row, in order.
   private listedBlends(editor: LookerStudioEditor): Promise<string[]> {
+    // Each row is "<name>\n<n> charts\nEDIT\nDUPLICATE\nREMOVE"; the buttons sit in a column of their own.
     return editor.page.evaluate(() =>
       [...document.querySelectorAll<HTMLElement>('[role=button][aria-label="Edit"]')]
         .filter((b) => b.getBoundingClientRect().width > 0)
-        .map((b) => {
-          let row: HTMLElement | null = b;
-          while (row && !row.querySelector('[role=button][aria-label="Duplicate"]'))
-            row = row.parentElement;
-          return row?.innerText.split('\n')[0]?.trim() ?? '';
-        }),
+        .map(
+          (b) =>
+            b
+              .closest<HTMLElement>('.resource-table-body > .row')
+              ?.innerText.split('\n')[0]
+              ?.trim() ?? '',
+        ),
     );
   }
 
