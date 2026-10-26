@@ -32,7 +32,7 @@ import type {
 import {
   type ChartProblem,
   type ReportCheck,
-  classifyChartError,
+  chartProblem,
 } from '@/contexts/reports/domain/Report.js';
 import {
   type DataSourceChange,
@@ -1981,7 +1981,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       await editor.declineConsent(2_000);
       const notes = editor.consentDeclines
         ? [
-            'Some charts read a data source with viewer\'s credentials: they show "Allow" instead of data until each viewer grants consent in Looker Studio. The consent dialog was declined, not granted on your behalf.',
+            'Some charts read a data source with viewer\'s credentials or the viewer email parameter: they show "Allow" instead of data until each viewer grants consent in Looker Studio. The consent dialog was declined, not granted on your behalf.',
           ]
         : [];
       mkdirSync(this.opts.screenshotsDir, { recursive: true });
@@ -2131,30 +2131,31 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         };
         for (const state of states.filter((s) => s.data)) {
           components++;
-          const problem = state.loading
-            ? {
-                problem: 'loading' as const,
-                message: `Still loading after ${opts.timeoutMs / 1000} s`,
-              }
-            : state.error
-              ? {
-                  problem: classifyChartError(state.error.title),
-                  message: [state.error.title, state.error.description].filter(Boolean).join(': '),
-                }
-              : state.noData
-                ? { problem: 'no_data' as const, message: 'No data' }
-                : null;
+          // Vega charts draw empty axes for no rows: count the points they drew.
+          const points =
+            state.loading || state.error || state.noData
+              ? undefined
+              : await editor.vegaPoints(state.index, 5_000);
+          const problem = chartProblem(
+            { ...state, ...(points !== undefined ? { points } : {}) },
+            opts.timeoutMs,
+          );
           if (!problem) continue;
           // Details first: selecting the chart afterwards could land on its link.
           const details = state.error?.hasDetails
             ? await editor.errorDetails(state.index).catch(() => undefined)
             : undefined;
-          const { kind, fields } = await this.describeForCheck(editor, state.index, state.type);
+          const { kind, fields, dataSource } = await this.describeForCheck(
+            editor,
+            state.index,
+            state.type,
+          );
           problems.push({
             ...where,
             index: state.index,
             kind,
             ...(state.title ? { title: state.title } : {}),
+            ...(dataSource ? { dataSource } : {}),
             ...(fields.length ? { fields } : {}),
             ...problem,
             ...(details ? { details } : {}),
@@ -2162,7 +2163,12 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         }
         await editor.deselect();
       }
-      return { pages, components, problems };
+      return {
+        pages,
+        components,
+        problems,
+        ...(editor.consentDeclines ? { consentDeclined: true } : {}),
+      };
     });
   }
 
@@ -2172,12 +2178,13 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     editor: LookerStudioEditor,
     index: number,
     type?: string,
-  ): Promise<{ kind: string; fields: string[] }> {
+  ): Promise<{ kind: string; fields: string[]; dataSource?: string }> {
     try {
       const title = await editor.select(index);
       const kind = title.replace(/ properties$/i, '');
       const fields = await editor.setupFields().catch(() => []);
-      return { kind, fields };
+      const dataSource = await editor.chartDataSource().catch(() => null);
+      return { kind, fields, ...(dataSource ? { dataSource } : {}) };
     } catch {
       return { kind: type ?? 'chart', fields: [] };
     }

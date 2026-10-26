@@ -620,6 +620,8 @@ export interface ChartProblem {
   kind: string;
   title?: string;
   fields?: string[];
+  // The data source in the chart's Setup panel.
+  dataSource?: string;
   problem: ChartProblemKind;
   // The message on the chart, e.g. "Too Many Rows: Due to the number of rows…".
   message: string;
@@ -632,6 +634,8 @@ export interface ReportCheck {
   // Charts and controls looked at (texts, shapes and images have no data).
   components: number;
   problems: ChartProblem[];
+  // The editor showed the viewer consent prompt and the check declined it.
+  consentDeclined?: boolean;
 }
 
 // Sorts the title of a chart error into a problem kind.
@@ -643,6 +647,32 @@ export function classifyChartError(title: string): ChartProblemKind {
     return 'data_set';
   if (/invalid|configuration|missing|field|dimension|metric/.test(t)) return 'configuration';
   return 'error';
+}
+
+// What the check read from one chart. `points` is the number of data points a
+// Vega chart drew (bar, column, line…): with no rows these charts draw empty
+// axes, not "No data"; undefined when it could not be read.
+export interface ChartReading {
+  loading: boolean;
+  noData: boolean;
+  error?: { title: string; description: string };
+  points?: number;
+}
+
+export function chartProblem(
+  r: ChartReading,
+  timeoutMs: number,
+): Pick<ChartProblem, 'problem' | 'message'> | null {
+  if (r.loading)
+    return { problem: 'loading', message: `Still loading after ${timeoutMs / 1000} s` };
+  if (r.error)
+    return {
+      problem: classifyChartError(r.error.title),
+      message: [r.error.title, r.error.description].filter(Boolean).join(': '),
+    };
+  if (r.noData) return { problem: 'no_data', message: 'No data' };
+  if (r.points === 0) return { problem: 'no_data', message: 'No data: the chart draws empty axes' };
+  return null;
 }
 
 // ── Report specs ──

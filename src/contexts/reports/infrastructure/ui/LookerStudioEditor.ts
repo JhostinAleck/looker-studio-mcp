@@ -2265,6 +2265,33 @@ export class LookerStudioEditor {
     }
   }
 
+  // Data points a Vega chart drew (see CHECK.vegaRoot), polled until it is
+  // drawn; undefined for charts without an iframe or hover targets, or not
+  // drawn in time. Its iframe is a sandboxed frame Playwright can still read.
+  async vegaPoints(index: number, timeoutMs: number): Promise<number | undefined> {
+    const iframe = this.component(index).locator('iframe').first();
+    if (!(await iframe.count())) return undefined;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const handle = await iframe.elementHandle({ timeout: 1_000 }).catch(() => null);
+      const frame = handle ? await handle.contentFrame().catch(() => null) : null;
+      const frames = frame ? [frame, ...frame.childFrames()] : [];
+      for (const f of frames) {
+        // The frame navigates while it loads: an evaluate can fail, retry.
+        const points = await f
+          .evaluate((c) => {
+            if (!document.querySelector(c.vegaRoot)) return null;
+            const marks = [...document.querySelectorAll(c.vegaPoints)];
+            return marks.length ? marks.reduce((n, m) => n + m.childElementCount, 0) : -1;
+          }, CHECK)
+          .catch(() => null);
+        if (points !== null) return points < 0 ? undefined : points;
+      }
+      if (Date.now() > deadline) return undefined;
+      await sleep(500);
+    }
+  }
+
   // Opens the "See details" dialog of a chart error and returns its text
   // (Looker's message, the BigQuery error, the error id), then closes it.
   async errorDetails(index: number): Promise<string | undefined> {
