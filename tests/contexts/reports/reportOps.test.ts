@@ -10,9 +10,12 @@ import {
 import { InvalidChartError } from '@/contexts/reports/domain/Report.js';
 import type { ReportRepository } from '@/contexts/reports/domain/ReportRepository.js';
 import {
+  type DeliveryControl,
   findVersion,
+  pickDeliveryControl,
   scheduleDateLabel,
   scheduleTimeLabel,
+  timeZoneOffset,
   validateSchedule,
 } from '@/contexts/reports/domain/reportOps.js';
 
@@ -60,6 +63,71 @@ describe('schedule labels', () => {
   });
 });
 
+describe('schedule options', () => {
+  it('checks weekdays, monthly_on, time zones and filters', () => {
+    const custom = (every: object) =>
+      validateSchedule({
+        recipients: [],
+        repeat: 'custom',
+        every: { interval: 2, ...every } as never,
+      });
+    expect(() => custom({ unit: 'week', weekdays: ['monday', 'thursday'] })).not.toThrow();
+    expect(() => custom({ unit: 'day', weekdays: ['monday'] })).toThrow(/weekdays/);
+    expect(() => custom({ unit: 'week', weekdays: [] })).toThrow(/at least one day/);
+    expect(() => custom({ unit: 'week', monthlyOn: 'weekday' })).toThrow(/monthly_on/);
+    expect(() => validateSchedule({ recipients: [], timeZone: 'Mars/Base' })).toThrow(/IANA/);
+    expect(() =>
+      validateSchedule({ recipients: [], filters: [{ field: 'f', dateRange: 'Last 7 days' }] }),
+    ).toThrow(/not both/);
+    expect(() => validateSchedule({ recipients: [], filters: [{ field: 'f' }] })).toThrow(/values/);
+    expect(() =>
+      validateSchedule({ recipients: [], filters: [{ dateRange: '2026-10-09..2026-10-01' }] }),
+    ).toThrow(InvalidChartError);
+    expect(() =>
+      validateSchedule({ recipients: [], filters: [{ field: 'f', values: [], index: 0 }] }),
+    ).toThrow(/index/);
+  });
+
+  it('writes zone offsets the way the dialog labels them', () => {
+    const at = new Date('2026-10-26T12:00:00Z');
+    expect(timeZoneOffset('Asia/Tokyo', at)).toBe('GMT+09:00');
+    expect(timeZoneOffset('Asia/Kolkata', at)).toBe('GMT+05:30');
+    expect(timeZoneOffset('America/Bogota', at)).toBe('GMT-05:00');
+    expect(timeZoneOffset('UTC', at)).toBe('GMT+00:00');
+  });
+
+  it('finds the filter control a filter sets', () => {
+    const c = (page: string, field: string, kind: DeliveryControl['kind']): DeliveryControl => ({
+      page,
+      field,
+      kind,
+      text: field,
+    });
+    const controls = [
+      c('One', 'feature', 'list'),
+      c('Two', '', 'date'),
+      c('Two', 'platform', 'input'),
+      c('Two', 'platform', 'list'),
+      c('Two', 'feature', 'list'),
+    ];
+    expect(pickDeliveryControl(controls, { dateRange: 'Last 7 days' })).toMatchObject({
+      page: 'Two',
+      position: 0,
+    });
+    expect(
+      pickDeliveryControl(controls, { page: 'Two', field: 'platform', index: 2, values: [] }),
+    ).toMatchObject({ page: 'Two', position: 2, control: { kind: 'list' } });
+    expect(() => pickDeliveryControl(controls, { field: 'platform', values: [] })).toThrow(/index/);
+    expect(() => pickDeliveryControl(controls, { field: 'feature', values: [] })).toThrow(
+      /pass page/,
+    );
+    expect(
+      pickDeliveryControl(controls, { page: 'One', field: 'Feature', values: [] }).position,
+    ).toBe(0);
+    expect(() => pickDeliveryControl(controls, { field: 'nope', values: [] })).toThrow(/it has/);
+  });
+});
+
 describe('findVersion', () => {
   const versions = [
     { index: 1, label: 'October 21, 2026 7:43 PM', current: true, authors: [] },
@@ -88,6 +156,10 @@ describe('report operation use cases', () => {
       ]),
     ).rejects.toThrow(/twice/);
     await expect(copyReport(r, ID, ' ', [])).rejects.toThrow(InvalidChartError);
+    await copyReport(r, ID, 'Copy', [{ original: 'a', reusable: 'Shared sales' }]);
+    await expect(copyReport(r, ID, 'Copy', [{ original: 'a', reusable: ' ' }])).rejects.toThrow(
+      /reusable/,
+    );
   });
 
   it('only gives a role to links anyone can open', async () => {

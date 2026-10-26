@@ -48,6 +48,7 @@ import {
   isUsed,
   parseConnectionChanges,
   parseConsoleLink,
+  parseFreshness,
 } from '@/contexts/reports/domain/DataSource.js';
 import {
   type CopiedReport,
@@ -58,10 +59,15 @@ import {
   type EmbedOptions,
   type LinkSharing,
   type ReportVersion,
+  type DeliveryControl,
+  type DeliveryFilter,
   REPEAT_OPTION,
+  WEEKDAYS,
   findVersion,
+  pickDeliveryControl,
   scheduleDateLabel,
   scheduleTimeLabel,
+  timeZoneOffset,
 } from '@/contexts/reports/domain/reportOps.js';
 import {
   type Aggregation,
@@ -112,6 +118,7 @@ import {
   PANEL_TITLE_HINT,
   PRESET_ORDER,
   REPORT_OPS,
+  scheduleEveryOption,
   SECTION,
   SEL,
   SHAPE_PATHS,
@@ -172,11 +179,17 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   private edit<T>(
     reportId: string,
     work: (editor: LookerStudioEditor) => Promise<T>,
-    opts: { visible?: boolean } = {},
+    opts: { visible?: boolean; timeZone?: string } = {},
   ): Promise<T> {
     const visit = this.visit.getStore();
     if (visit?.reportId === reportId) return this.inVisit(visit, work);
+    const { timeZone, ...pageOpts } = opts;
     return this.opts.browser.withPage(async (page) => {
+      // Some dialogs (Schedule delivery) take the browser's time zone.
+      if (timeZone) {
+        const cdp = await page.context().newCDPSession(page);
+        await cdp.send('Emulation.setTimezoneOverride', { timezoneId: timeZone });
+      }
       const editor = await LookerStudioEditor.openReport(page, reportId, this.opts.stepTimeoutMs);
       // Pointer work only reaches what is on screen: make the whole page fit.
       const restore = await this.fitWindowTo(page, page.locator(SEL.canvas).first());
@@ -197,7 +210,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       } finally {
         await restore();
       }
-    }, opts);
+    }, pageOpts);
   }
 
   async listReports(): Promise<ReportSummary[]> {
@@ -2254,8 +2267,18 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       const page = editor.page;
       await this.openSourcesPanel(editor);
       const row = findDataSource(await this.readSourceRows(editor), ref);
-      await this.editListedSource(editor, row);
       const notes: string[] = [];
+      const editing =
+        change.name !== undefined ||
+        change.sql !== undefined ||
+        change.credentials ||
+        change.freshness;
+      if (!editing) {
+        notes.push(await this.makeReusable(editor, row.alias, change.grantEditorAccess));
+        await this.closeSourcesPanel(editor);
+        return notes;
+      }
+      await this.editListedSource(editor, row);
       if (change.sql !== undefined) notes.push(...(await this.replaceSql(editor, change.sql)));
       if (change.name !== undefined) {
         await editor.step(`rename the data source to "${change.name}"`, async () => {
@@ -2291,8 +2314,10 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         });
       }
       if (change.freshness) {
-        const label = FRESHNESS_LABEL[change.freshness];
-        await editor.step(`set the data freshness to ${label}`, async () => {
+        const setting = parseFreshness(change.freshness);
+        const label =
+          'preset' in setting ? FRESHNESS_LABEL[setting.preset] : DATA_SOURCE.freshnessCustom;
+        await editor.step(`set the data freshness to ${change.freshness}`, async () => {
           await page.getByRole('button', { name: DATA_SOURCE.freshnessButton }).click();
           const dialog = page.locator(DATA_SOURCE.freshnessDialog);
           await dialog.waitFor({ timeout: this.opts.stepTimeoutMs });
@@ -2300,6 +2325,20 @@ export class LookerStudioUiReportRepository implements ReportRepository {
             .locator('md-radio-button')
             .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(label)}\\s*(Default)?\\s*$`) })
             .click();
+          if ('custom' in setting) {
+            // The amounts depend on the unit: pick the unit first.
+            await editor.settle(500);
+            await this.pickMdSelect(
+              editor,
+              dialog.locator(DATA_SOURCE.freshnessUnit),
+              setting.custom.unit,
+            );
+            await this.pickMdSelect(
+              editor,
+              dialog.locator(DATA_SOURCE.freshnessAmount),
+              String(setting.custom.amount),
+            );
+          }
           await dialog.getByRole('button', { name: /set data freshness/i }).click();
           await dialog.waitFor({ state: 'detached', timeout: this.opts.stepTimeoutMs });
           await editor.settle(1000);
@@ -2309,9 +2348,73 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       if (change.credentials) notes.push(`Data credentials: ${after.credentials ?? '?'}`);
       if (change.freshness) notes.push(`Data freshness: ${after.freshness ?? '?'}`);
       await this.leaveSourceEditor(editor, true);
+      if (change.makeReusable)
+        notes.push(await this.makeReusable(editor, row.alias, change.grantEditorAccess));
       await this.closeSourcesPanel(editor);
+      if (change.freshness && after.freshness !== change.freshness)
+        throw new EditorStepError(
+          `the data freshness shows "${after.freshness ?? '?'}" instead of ${change.freshness}`,
+        );
       return notes;
     });
+  }
+
+  // ── reusable data sources ──
+  // Make reusable moves an embedded data source to the account's data sources
+  // (the alias stays); there is no way back from the editor.
+  private async makeReusable(
+    editor: LookerStudioEditor,
+    alias: string,
+    grantEditorAccess?: boolean,
+  ): Promise<string> {
+    const page = editor.page;
+    const row = (await this.readSourceRows(editor)).find((r) => r.alias === alias);
+    if (/reusable/i.test(row?.scope ?? '')) return `${row!.name} (${alias}) was already reusable.`;
+    await editor.step(`make the data source ${alias} reusable`, async () => {
+      await (
+        await this.sourceRow(editor, alias)
+      )
+        .getByRole('button', { name: DATA_SOURCE.makeReusableButton })
+        .click();
+      const dialog = page.locator('mat-dialog-container', {
+        hasText: DATA_SOURCE.makeReusableDialog,
+      });
+      await dialog.waitFor({ timeout: this.opts.stepTimeoutMs });
+      if (grantEditorAccess !== undefined) {
+        const box = dialog.locator('mat-checkbox', { hasText: DATA_SOURCE.grantEditorAccess });
+        const checked = await box.locator('input[type=checkbox]').isChecked();
+        if (checked !== grantEditorAccess) await box.locator('input[type=checkbox]').click();
+      }
+      await dialog.getByRole('button', { name: DATA_SOURCE.makeReusableButton }).click();
+      await dialog.waitFor({ state: 'detached', timeout: this.opts.stepTimeoutMs });
+      await editor.settle(1500);
+      const after = (await this.readSourceRows(editor)).find((r) => r.alias === alias);
+      if (!/reusable/i.test(after?.scope ?? '')) throw new Error('it is still listed as embedded');
+    });
+    return `${row?.name ?? alias} (${alias}) is now a reusable data source in the account's data sources.`;
+  }
+
+  // AngularJS md-select: its options open in a menu container outside the dialog.
+  private async pickMdSelect(
+    editor: LookerStudioEditor,
+    select: Locator,
+    option: string,
+  ): Promise<void> {
+    const page = editor.page;
+    await select.click();
+    const menu = page.locator(DATA_SOURCE.openSelectMenu).last();
+    await menu.waitFor({ timeout: 5_000 });
+    const item = menu
+      .locator('md-option')
+      .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(option)}\\s*$`) });
+    if (!(await item.count())) {
+      const offered = (await menu.locator('md-option').allInnerTexts()).map((t) => t.trim());
+      await page.keyboard.press('Escape');
+      throw new Error(`no option "${option}" (offered: ${offered.join(', ')})`);
+    }
+    await item.first().click();
+    await menu.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => undefined);
+    await editor.settle(400);
   }
 
   async updateField(
@@ -2394,7 +2497,11 @@ export class LookerStudioUiReportRepository implements ReportRepository {
           name: cells[0] ?? '',
           alias: cells.at(-1) ?? '',
           connector: cells[1] ?? '',
-          scope: /\b(Embedded|Reusable)\b/i.exec((r as HTMLElement).innerText)?.[1] ?? '',
+          // Not from the name ("… reusable") nor the MAKE REUSABLE button.
+          scope:
+            /\b(Embedded|Reusable)\b/.exec(
+              (r as HTMLElement).innerText.replace(cells[0] ?? '', ''),
+            )?.[1] ?? '',
           usedIn: used >= 0 ? cells[used]! : '',
           status: used >= 0 ? (cells[used + 1] ?? '') : '',
         };
@@ -3070,6 +3177,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     replacements: DataSourceReplacement[],
   ): Promise<CopiedReport> {
     const timeout = this.opts.stepTimeoutMs;
+    const swapped: string[] = [];
     const id = await this.opts.browser.withPage(async (page) => {
       const editor = await LookerStudioEditor.openReport(page, reportId, timeout);
       await editor.clickMenu('File', ['Make a copy...']);
@@ -3079,6 +3187,9 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         });
         await dialog.waitFor({ timeout });
         await editor.settle(1000);
+        for (const r of replacements) {
+          if ('reusable' in r) swapped.push(await this.pickCopySource(editor, dialog, r));
+        }
         await page.evaluate(
           ({ input, cookie }) => {
             const field = document.querySelector<HTMLInputElement>(input);
@@ -3102,12 +3213,13 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         }
       });
     });
-    const replaced: string[] = [];
+    const replaced: string[] = [...swapped];
     try {
       await this.edit(id, async (editor) => {
         await editor.rename(name);
         for (const replacement of replacements) {
-          replaced.push(await this.reconnectSource(editor, replacement));
+          if ('source' in replacement)
+            replaced.push(await this.reconnectSource(editor, replacement));
         }
       });
     } catch (err) {
@@ -3121,7 +3233,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
   // A reusable one is shared: reconnecting it would change every report using it.
   private async reconnectSource(
     editor: LookerStudioEditor,
-    { original, source }: DataSourceReplacement,
+    { original, source }: Extract<DataSourceReplacement, { source: unknown }>,
   ): Promise<string> {
     const page = editor.page;
     await editor.clickMenu('Resource', ['Manage added data sources']);
@@ -3151,7 +3263,7 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     }
     if (!row.embedded) {
       throw new EditorStepError(
-        `"${original}" is a reusable data source: reconnecting it would change every report that uses it`,
+        `"${original}" is a reusable data source: reconnecting it would change every report that uses it (pass reusable to swap it for another reusable data source)`,
       );
     }
     await page.mouse.click(row.point.x, row.point.y);
@@ -3175,6 +3287,51 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     });
     await this.closeSourcesPanel(editor);
     return `${original} → ${newName ?? original} (${describeSource(source)})`;
+  }
+
+  // The copy dialog pairs each data source of the original with a "New Data
+  // Source" picker: added data sources, then the account's reusable ones.
+  // The pick fills the form's datasourceMap, so the copy is born on it.
+  private async pickCopySource(
+    editor: LookerStudioEditor,
+    dialog: Locator,
+    { original, reusable }: Extract<DataSourceReplacement, { reusable: string }>,
+  ): Promise<string> {
+    const page = editor.page;
+    return editor.step(`pick ${reusable} for ${original} in the copy dialog`, async () => {
+      const rows = dialog.locator(REPORT_OPS.copySourceRow);
+      const pairs = await rows.evaluateAll(
+        (all, label) =>
+          all.map((r) => [...r.querySelectorAll(label)].map((l) => l.textContent?.trim() ?? '')),
+        REPORT_OPS.copySourceName,
+      );
+      const index = pairs.findIndex((p) => p[0] === original);
+      if (index < 0) {
+        throw new Error(
+          `the copy dialog has no data source "${original}" (it lists ${pairs.map((p) => p[0]).join(', ') || 'none'}; only data sources used by a component are copied)`,
+        );
+      }
+      await rows.nth(index).locator(REPORT_OPS.copySourcePicker).nth(1).locator('button').click();
+      const overlay = page.locator('.cdk-overlay-container');
+      const options = overlay.locator(REPORT_OPS.copySourceOption);
+      await options.first().waitFor({ timeout: this.opts.stepTimeoutMs });
+      await editor.settle(800);
+      const option = options.filter({ hasText: new RegExp(`^\\s*${escapeRegExp(reusable)}\\s*$`) });
+      if (!(await option.count())) {
+        const offered = (await options.allInnerTexts()).map((t) => t.trim()).filter(Boolean);
+        await page.keyboard.press('Escape');
+        throw new Error(
+          `no data source "${reusable}" to pick (offered: ${offered.join(', ')}); make one reusable with update_data_source make_reusable`,
+        );
+      }
+      await option.first().click();
+      await editor.settle(1000);
+      const shown = (
+        await rows.nth(index).locator(REPORT_OPS.copySourceName).nth(1).innerText()
+      ).trim();
+      if (shown !== reusable) throw new Error(`the new data source shows "${shown}"`);
+      return `${original} → ${reusable} (reusable)`;
+    });
   }
 
   // Share › Link settings. A change shows Save instead of Done; Google keeps
@@ -3356,7 +3513,13 @@ export class LookerStudioUiReportRepository implements ReportRepository {
       reportId,
       async (editor) => {
         const page = editor.page;
-        const dialog = await this.openSchedule(editor);
+        let dialog = await this.openSchedule(editor);
+        // A schedule keeps the zone it was created in: recreate it in the new one.
+        if (schedule.timeZone && (await this.isScheduled(dialog))) {
+          await this.deleteSchedule(editor, dialog);
+          await this.closeSchedule(editor, dialog);
+          dialog = await this.openSchedule(editor);
+        }
         const select = (label: string, nth = 1) =>
           dialog.locator(
             `xpath=.//label[normalize-space()="${label}"]/following::mat-select[${nth}]`,
@@ -3450,22 +3613,33 @@ export class LookerStudioUiReportRepository implements ReportRepository {
             const option = REPEAT_OPTION[schedule.repeat];
             await choose(select('Repeat'), new RegExp(`^\\s*${option}`), 'Repeat');
             if (schedule.repeat === 'custom' && schedule.every) {
-              const every = dialog.locator(
-                'xpath=.//label[normalize-space()="Repeat"]/following::input[@type="number"][1]',
-              );
-              await every.fill(String(schedule.every.interval));
-              await choose(
-                select('Repeat', 2),
-                new RegExp(`^\\s*${schedule.every.unit}s?\\s*$`, 'i'),
-                'Every',
-              );
+              const { interval, unit, weekdays, monthlyOn } = schedule.every;
+              // The unit first: it sets the interval's maximum.
+              await choose(select('Repeat', 2), scheduleEveryOption(unit, monthlyOn), 'Every');
+              const every = dialog.locator(REPORT_OPS.everyAmount);
+              const max = Number(await every.getAttribute('max'));
+              if (max && interval > max)
+                throw new Error(`a custom repeat goes up to every ${max} ${unit}s`);
+              await every.fill(String(interval));
+              await editor.settle(400);
+              if (weekdays) await this.pickScheduleWeekdays(editor, dialog, weekdays);
             }
           }
           if (schedule.time) {
             const label = scheduleTimeLabel(schedule.time);
             await choose(select('Time'), new RegExp(`^\\s*${label}\\s*$`), 'Time');
           }
+          if (schedule.timeZone) {
+            const shown = (await this.readSchedule(dialog)).Timezone ?? '';
+            const offset = timeZoneOffset(schedule.timeZone);
+            if (!shown.startsWith(offset))
+              throw new Error(
+                `the schedule shows the time zone "${shown}", not one at ${offset} (${schedule.timeZone})`,
+              );
+          }
         });
+        if (schedule.filters?.length)
+          await this.setScheduleFilters(editor, dialog, schedule.filters);
         await editor.step('save the email schedule', async () => {
           await dialog.getByRole('button', { name: 'Save', exact: true }).click();
           // Google answers in a snack bar: "Report scheduled", "Schedule updated" or "Failed".
@@ -3477,19 +3651,25 @@ export class LookerStudioUiReportRepository implements ReportRepository {
         });
         const saved = await this.openSchedule(editor);
         const info = await this.readSchedule(saved);
+        const filters = await this.readScheduleFilters(editor, saved);
         await this.closeSchedule(editor, saved);
-        return info;
+        return { ...info, ...(filters.length ? { Filters: filters.join('; ') } : {}) };
       },
-      { visible: true },
+      { visible: true, ...(schedule.timeZone ? { timeZone: schedule.timeZone } : {}) },
     );
   }
 
   async getDelivery(reportId: string): Promise<DeliveryInfo | null> {
     return this.edit(reportId, async (editor) => {
       const dialog = await this.openSchedule(editor);
-      const info = (await this.isScheduled(dialog)) ? await this.readSchedule(dialog) : null;
+      if (!(await this.isScheduled(dialog))) {
+        await this.closeSchedule(editor, dialog);
+        return null;
+      }
+      const info = await this.readSchedule(dialog);
+      const filters = await this.readScheduleFilters(editor, dialog);
       await this.closeSchedule(editor, dialog);
-      return info;
+      return { ...info, ...(filters.length ? { Filters: filters.join('; ') } : {}) };
     });
   }
 
@@ -3497,26 +3677,324 @@ export class LookerStudioUiReportRepository implements ReportRepository {
     return this.edit(
       reportId,
       async (editor) => {
-        const page = editor.page;
         const dialog = await this.openSchedule(editor);
         if (!(await this.isScheduled(dialog))) {
           await this.closeSchedule(editor, dialog);
           return false;
         }
-        await editor.walkMenu(
-          () => dialog.getByRole('button', { name: 'More options' }).click(),
-          [REPORT_OPS.deleteSchedule],
-        );
-        await editor.step('delete the email schedule', async () => {
-          const snack = page.locator('.mat-mdc-snack-bar-container').first();
-          await snack.waitFor({ timeout: this.opts.stepTimeoutMs });
-          const said = (await snack.innerText()).trim();
-          if (!/deleted/i.test(said)) throw new Error(`Looker Studio answered "${said}"`);
-        });
+        await this.deleteSchedule(editor, dialog);
         return true;
       },
       { visible: true },
     );
+  }
+
+  // ── Email delivery: weekdays, filters ──
+
+  // The schedule summary's More options › Delete schedule.
+  private async deleteSchedule(editor: LookerStudioEditor, dialog: Locator): Promise<void> {
+    await editor.walkMenu(
+      () => dialog.getByRole('button', { name: 'More options' }).click(),
+      [REPORT_OPS.deleteSchedule],
+    );
+    await editor.step('delete the email schedule', async () => {
+      const snack = editor.page.locator('.mat-mdc-snack-bar-container').first();
+      await snack.waitFor({ timeout: this.opts.stepTimeoutMs });
+      const said = (await snack.innerText()).trim();
+      if (!/deleted/i.test(said)) throw new Error(`Looker Studio answered "${said}"`);
+    });
+  }
+
+  // "On S M T W T F S": checkboxes with the day as id. Filling the interval
+  // ticks the start date's weekday, so every day is set either way.
+  private async pickScheduleWeekdays(
+    editor: LookerStudioEditor,
+    dialog: Locator,
+    weekdays: readonly string[],
+  ): Promise<void> {
+    const boxes = dialog.locator(REPORT_OPS.weekdayBoxes);
+    if (!(await boxes.count())) throw new Error('the custom repeat shows no weekdays');
+    for (const day of WEEKDAYS) {
+      const box = dialog.locator(`${REPORT_OPS.weekdayBoxes}#${day}`);
+      if ((await box.isChecked()) !== weekdays.includes(day)) {
+        await dialog.locator(`label[for=${day}]`).click();
+        await editor.settle(200);
+      }
+    }
+    const on = await boxes.evaluateAll((all) =>
+      all.filter((b) => (b as HTMLInputElement).checked).map((b) => b.id),
+    );
+    if (on.join() !== WEEKDAYS.filter((d) => weekdays.includes(d)).join())
+      throw new Error(`the custom repeat is on ${on.join(', ') || 'no day'}`);
+  }
+
+  // The Filters tab draws the filter controls of each page (one expansion
+  // panel per page) as live controls: the email applies what they hold.
+  private async openScheduleFilters(editor: LookerStudioEditor, dialog: Locator): Promise<boolean> {
+    const tab = dialog.getByRole('tab', { name: REPORT_OPS.filtersTab });
+    if (!(await tab.count())) return false;
+    await tab.click();
+    await dialog
+      .locator(REPORT_OPS.filtersLoaded)
+      .waitFor({ timeout: this.opts.stepTimeoutMs })
+      .catch(() => undefined);
+    await editor.settle(1500);
+    // Collapsed pages keep their controls out of the DOM.
+    const headers = dialog.locator(
+      `${REPORT_OPS.filterPanel}:not(.mat-expanded) mat-expansion-panel-header`,
+    );
+    for (let n = await headers.count(); n > 0; n--) {
+      await headers.first().click();
+      await editor.settle(500);
+    }
+    return true;
+  }
+
+  private scheduleControls(dialog: Locator): Promise<DeliveryControl[]> {
+    return dialog.evaluate((d, sel) => {
+      const out: DeliveryControl[] = [];
+      for (const panel of d.querySelectorAll(sel.filterPanel)) {
+        const page = panel.querySelector('mat-panel-title')?.textContent?.trim() ?? '';
+        for (const comp of panel.querySelectorAll<HTMLElement>(sel.filterControl)) {
+          const text = comp.innerText
+            .replace(/arrow_drop_down|▼/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+          const input = comp.querySelector<HTMLInputElement>('input');
+          const kind = comp.matches(sel.dateControl)
+            ? 'date'
+            : input
+              ? 'input'
+              : comp.querySelector(sel.listButton)
+                ? 'list'
+                : 'other';
+          // "feature", "feature: a, b (2)", "platform (Equals)".
+          const field = kind === 'date' ? '' : (text.split(/:| \(/)[0] ?? '').trim();
+          out.push({ page, field, kind, text, ...(input ? { value: input.value } : {}) });
+        }
+      }
+      return out;
+    }, REPORT_OPS);
+  }
+
+  private async setScheduleFilters(
+    editor: LookerStudioEditor,
+    dialog: Locator,
+    filters: DeliveryFilter[],
+  ): Promise<void> {
+    const page = editor.page;
+    await editor.step('open the Filters tab of the email schedule', async () => {
+      if (!(await this.openScheduleFilters(editor, dialog)))
+        throw new Error('the schedule has no Filters tab: the report has no filter controls');
+    });
+    for (const filter of filters) {
+      const what = filter.dateRange !== undefined ? 'the date range' : filter.field!;
+      await editor.step(`set the email filter on ${what}`, async () => {
+        const controls = await this.scheduleControls(dialog);
+        const target = pickDeliveryControl(controls, filter);
+        const comp = dialog
+          .locator(REPORT_OPS.filterPanel)
+          .filter({
+            has: page.locator('mat-panel-title', {
+              hasText: new RegExp(`^\\s*${escapeRegExp(target.page)}\\s*$`),
+            }),
+          })
+          .first()
+          .locator(REPORT_OPS.filterControl)
+          .nth(target.position);
+        if (target.control.kind === 'date') {
+          await comp.click();
+          await editor.pickDateRange(filter.dateRange!);
+        } else if (target.control.kind === 'input') {
+          const values = filter.values!;
+          if (values.length > 1) throw new Error(`${what} is an input box: it takes one value`);
+          const input = comp.locator('input');
+          await input.click();
+          await page.keyboard.press('ControlOrMeta+A');
+          await page.keyboard.press('Backspace');
+          if (values[0]) await page.keyboard.type(values[0], { delay: 15 });
+          await page.keyboard.press('Enter');
+          await editor.settle(800);
+        } else if (target.control.kind === 'list') {
+          await comp.locator(REPORT_OPS.listButton).click();
+          const multi = await this.pickListValues(editor, filter.values!, what);
+          const shown = (await comp.innerText()).replace(/\s+/g, ' ');
+          // A single-select control holding its only value filters nothing: Looker drops it.
+          if (!multi && !shown.includes(filter.values![0]!))
+            throw new Error(
+              `Looker Studio did not keep "${filter.values![0]}" (the control shows "${shown.replace(/▼/g, '').trim()}"; a value that is the only one of the field filters nothing)`,
+            );
+        } else {
+          throw new Error(`the ${target.page} control "${target.control.text}" cannot be set here`);
+        }
+      });
+    }
+  }
+
+  // A drop-down or list control's menu: a "Select all" header box (multiple
+  // selection only), a search box and the values (virtual-scrolled).
+  private async pickListValues(
+    editor: LookerStudioEditor,
+    values: string[],
+    what: string,
+  ): Promise<boolean> {
+    const page = editor.page;
+    const list = page.locator(REPORT_OPS.listMenu).filter({ visible: true }).last();
+    await list.waitFor({ timeout: this.opts.stepTimeoutMs });
+    await editor.settle(800);
+    const search = list.locator(REPORT_OPS.listSearch);
+    const header = list.locator(REPORT_OPS.listSelectAll);
+    const multi = (await header.count()) > 0;
+    const offered = async () => {
+      if (await search.count()) await search.fill('');
+      await editor.settle(600);
+      return list.evaluate(
+        (l, sel) =>
+          [...l.querySelectorAll<HTMLElement>(sel)].map((e) => e.title || e.innerText.trim()),
+        `${REPORT_OPS.listItemMulti} ${REPORT_OPS.listValueMulti}[title], ${REPORT_OPS.listItemSingle} ${REPORT_OPS.listValueSingle}`,
+      );
+    };
+    const find = async (value: string) => {
+      if (await search.count()) {
+        await search.fill(value);
+        await editor.settle(800);
+      }
+      const item = list
+        .locator(multi ? REPORT_OPS.listItemMulti : REPORT_OPS.listItemSingle)
+        .filter({
+          has: page.locator(
+            `${multi ? REPORT_OPS.listValueMulti : REPORT_OPS.listValueSingle}[title="${cssEscape(value)}"]`,
+          ),
+        })
+        .first();
+      if (!(await item.count())) {
+        const known = await offered();
+        await this.closeListMenu(editor);
+        throw new Error(`${what} has no value "${value}" (offered: ${known.join(', ')})`);
+      }
+      return item;
+    };
+    if (!multi) {
+      if (values.length !== 1) {
+        await this.closeListMenu(editor);
+        throw new Error(`${what} is a single-select control: pass exactly one value`);
+      }
+      await (await find(values[0]!)).click();
+      await editor.settle(800);
+    } else {
+      // Select all, then (unless all values are wanted) clear and tick each.
+      for (let round = 0; round < 3; round++) {
+        if ((await header.getAttribute('aria-checked')) === 'true') break;
+        await header.click();
+        await editor.settle(500);
+      }
+      if (values.length) {
+        await header.click();
+        await editor.settle(500);
+        for (const value of values) {
+          const box = (await find(value)).locator('md-checkbox');
+          if ((await box.getAttribute('aria-checked')) !== 'true') await box.click();
+          await editor.settle(400);
+        }
+        if (await search.count()) await search.fill('');
+        await editor.settle(500);
+      }
+    }
+    await this.closeListMenu(editor);
+    return multi;
+  }
+
+  // The menu closes through a click on its backdrop, away from the menu that
+  // covers the backdrop's middle; Escape would close the whole schedule dialog.
+  private async closeListMenu(editor: LookerStudioEditor): Promise<void> {
+    const page = editor.page;
+    const list = page.locator(REPORT_OPS.listMenu).filter({ visible: true });
+    for (const backdrop of REPORT_OPS.listBackdrops) {
+      if (!(await list.count())) return;
+      const point = await page.evaluate((sel) => {
+        for (const b of document.querySelectorAll<HTMLElement>(sel)) {
+          const r = b.getBoundingClientRect();
+          for (const [x, y] of [
+            [r.x + 6, r.y + 6],
+            [r.right - 6, r.y + 6],
+            [r.x + 6, r.bottom - 6],
+          ] as const) {
+            if (document.elementFromPoint(x, y) === b) return { x, y };
+          }
+        }
+        return null;
+      }, backdrop);
+      if (point) {
+        await page.mouse.click(point.x, point.y);
+        await editor.settle(600);
+      }
+    }
+    if (await list.count()) throw new Error('the control menu did not close');
+  }
+
+  // Edit schedule › Filters, read every control, then Cancel back to the
+  // summary. Date range controls show dates: their picker names the preset.
+  private async readScheduleFilters(
+    editor: LookerStudioEditor,
+    dialog: Locator,
+  ): Promise<string[]> {
+    const page = editor.page;
+    return editor.step('read the email filters', async () => {
+      await dialog.getByRole('button', { name: REPORT_OPS.editSchedule }).click();
+      await dialog.getByRole('button', { name: 'Save', exact: true }).waitFor();
+      const lines: string[] = [];
+      if (await this.openScheduleFilters(editor, dialog)) {
+        const controls = await this.scheduleControls(dialog);
+        const position = new Map<string, number>();
+        for (const c of controls) {
+          const nth = position.get(c.page) ?? 0;
+          position.set(c.page, nth + 1);
+          let text = c.kind === 'input' ? `${c.text} = ${c.value || '(empty)'}` : c.text;
+          if (c.kind === 'date') {
+            await dialog
+              .locator(REPORT_OPS.filterPanel)
+              .filter({
+                has: page.locator('mat-panel-title', {
+                  hasText: new RegExp(`^\\s*${escapeRegExp(c.page)}\\s*$`),
+                }),
+              })
+              .first()
+              .locator(REPORT_OPS.filterControl)
+              .nth(nth)
+              .click();
+            await editor.settle(800);
+            const preset = await page.evaluate(() => {
+              const apply = [
+                ...document.querySelectorAll<HTMLElement>('.cdk-overlay-container button'),
+              ]
+                .filter((b) => b.offsetParent !== null && b.textContent?.trim() === 'Apply')
+                .pop();
+              for (let box = apply?.parentElement; box; box = box.parentElement) {
+                const menu = [...box.querySelectorAll<HTMLElement>('button')].find((b) =>
+                  b.textContent?.includes('arrow_drop_down'),
+                );
+                if (menu) return menu.innerText.replace('arrow_drop_down', '').trim();
+              }
+              return '';
+            });
+            // The dialog has its own Cancel: close the picker by the one in it.
+            await page
+              .locator(REPORT_OPS.datePopup)
+              .getByRole('button', { name: 'Cancel', exact: true })
+              .last()
+              .click();
+            await editor.settle(500);
+            text = preset ? `date range ${preset} (${c.text})` : `date range ${c.text}`;
+          }
+          lines.push(`${c.page} › ${text}`);
+        }
+      }
+      await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await dialog
+        .getByRole('button', { name: REPORT_OPS.editSchedule })
+        .waitFor({ timeout: this.opts.stepTimeoutMs });
+      return lines;
+    });
   }
 
   private async openVersionHistory(editor: LookerStudioEditor): Promise<void> {

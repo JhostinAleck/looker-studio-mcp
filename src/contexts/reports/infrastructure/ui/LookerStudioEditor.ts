@@ -1074,6 +1074,26 @@ export class LookerStudioEditor {
     await this.settle(500);
   }
 
+  // A date picker popup that is already open (e.g. a date range control
+  // clicked outside the canvas): picks the preset or fixed range and applies.
+  async pickDateRange(range: string): Promise<void> {
+    const fixed = FIXED_RANGE_RE.exec(range.trim());
+    await this.pickInDatePopup(
+      fixed ? ['Fixed'] : datePresetPath(range),
+      fixed ? [fixed[1]!, fixed[2]!] : undefined,
+    );
+    // An Apply clicked while the preset menu closes can go missing.
+    const apply = this.page
+      .locator('.cdk-overlay-container')
+      .getByRole('button', { name: 'Apply', exact: true });
+    if (await apply.isVisible().catch(() => false)) {
+      await apply.last().click();
+      await sleep(600);
+    }
+    if (await apply.isVisible().catch(() => false))
+      throw new Error('the date picker did not close');
+  }
+
   // "Previous period", "Previous year" or "None".
   async setComparison(preset: string): Promise<void> {
     await this.step(`compare with ${preset}`, async () => {

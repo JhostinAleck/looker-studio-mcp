@@ -459,6 +459,15 @@ export const DATA_SOURCE = {
   openMenu: '.md-open-menu-container',
   // The Data freshness dialog is an AngularJS md-dialog, not a mat-dialog.
   freshnessDialog: 'md-dialog.set-query-cache-policy-dialog',
+  // Its "Custom" period: two AngularJS md-selects (amount, then minutes/hours).
+  freshnessAmount: 'md-select.custom-cache-period-amount',
+  freshnessUnit: 'md-select.custom-cache-chrono-unit',
+  openSelectMenu: '.md-select-menu-container.md-active',
+  freshnessCustom: 'Custom',
+  // Manage added data sources › Make reusable asks in a mat-dialog.
+  makeReusableButton: /^make reusable$/i,
+  makeReusableDialog: 'Make this data source reusable',
+  grantEditorAccess: 'Grant report editors access',
   selectedOption: 'ng2-config-column-item:has(.list-option.selected) a[href]',
 } as const;
 
@@ -531,6 +540,12 @@ export const REPORT_OPS = {
   legacyDialog: 'md-dialog',
   copyDialogTitle: 'Copy this report',
   copyButton: 'Copy Report',
+  // Its rows: the original's data source, then the "New Data Source" picker,
+  // whose menu lists added and available (reusable) data sources.
+  copySourceRow: '.datasource-item-repeat',
+  copySourcePicker: 'datasource-selector-button',
+  copySourceName: '.datasource-name-label',
+  copySourceOption: '.datasource-option',
   // The copy form posts with an xsrf field the dialog leaves empty here; the
   // token is the RAP_XSRF_TOKEN cookie.
   copyXsrfInput: 'md-dialog input[name=xsrf]',
@@ -550,6 +565,28 @@ export const REPORT_OPS = {
   scheduled: 'This report is scheduled',
   editSchedule: 'Edit schedule',
   deleteSchedule: 'Delete schedule',
+  // Repeat › Custom: "Every [n] [day|week|month on the 27th day|month on the
+  // last Tuesday]", and for weeks "On" checkboxes with the day as id.
+  everyAmount: 'input[formcontrolname=amount]',
+  weekdayBoxes: '.day-checkbox-container input[type=checkbox]',
+  // The Filters tab: an expansion panel per page with its filter controls.
+  filtersTab: 'Filters',
+  filtersLoaded: 'schedule-filters mat-accordion.filters-loaded',
+  filterPanel: 'schedule-filters mat-expansion-panel',
+  filterControl: 'ng2-canvas-component',
+  dateControl: '.simple-daterangepicker',
+  listButton: 'button[aria-label="Open data control menu"]',
+  // A drop-down/list control's menu (AngularJS, outside the dialog).
+  listMenu: '.list-control-container',
+  listSearch: 'input[placeholder="Type to search"]',
+  listSelectAll: '.header md-checkbox',
+  listItemMulti: '.item-multi',
+  listItemSingle: '.item-single',
+  listValueMulti: '.md-label span',
+  listValueSingle: '.dimension-value',
+  listBackdrops: ['.lego-overlay-transparent-backdrop', '.popup-backdrop'],
+  // A date range control's picker, over the dialog.
+  datePopup: '.cdk-overlay-connected-position-bounding-box',
   // Rows of File › Version history (virtual-scrolled).
   versionItem: '.revision-item',
   versionName: 'input[aria-label="Revision name"], .revision-item-text-box',
@@ -561,3 +598,15 @@ export const REPORT_OPS = {
   embedEnable: 'Enable embedding',
   embedNavigation: 'Show report navigation in embedded mode',
 } as const;
+
+// Repeat › Custom › Every: "day", "week", "month on the 27th day" or "month
+// on the last Tuesday" (plural once the interval is above 1).
+export function scheduleEveryOption(
+  unit: 'day' | 'week' | 'month',
+  monthlyOn: 'day' | 'weekday' = 'day',
+): RegExp {
+  if (unit !== 'month') return new RegExp(`^\\s*${unit}s?\\s*$`, 'i');
+  return monthlyOn === 'day'
+    ? /^\s*months? on the \d+\w* day\s*$/i
+    : /^\s*months? on the \S+ (sun|mon|tues|wednes|thurs|fri|satur)day\s*$/i;
+}

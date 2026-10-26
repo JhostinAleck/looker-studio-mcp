@@ -14,7 +14,7 @@ import {
 } from '@/contexts/reports/domain/ReportRepository.js';
 import type { ButtonSpec, DataSettings, FilterSpec } from '@/contexts/reports/domain/Report.js';
 import { CONNECTORS } from '@/contexts/reports/domain/connectors.js';
-import { LINK_ACCESS, REPEATS } from '@/contexts/reports/domain/reportOps.js';
+import { LINK_ACCESS, REPEATS, WEEKDAYS } from '@/contexts/reports/domain/reportOps.js';
 
 const projectId = z
   .string()
@@ -894,7 +894,23 @@ export const updateDataSourceSchema = z.object({
     .enum(CREDENTIALS)
     .optional()
     .describe("owner: the data source reads with its owner's access; viewer: each viewer's own"),
-  freshness: z.enum(FRESHNESS).optional().describe('How often Looker Studio re-reads the data'),
+  freshness: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      `How often Looker Studio re-reads the data: a preset (${FRESHNESS.join(', ')}) or a custom period, every 1, 2, 3, 4, 5, 10, 15, 20, 25, 30, 40 or 50 minutes or 1 to 12 hours (e.g. "30 minutes", "2 hours"); nothing longer than 12 hours`,
+    ),
+  make_reusable: z
+    .boolean()
+    .optional()
+    .describe(
+      'Make an embedded data source reusable (Manage added data sources › Make reusable): it moves to the account data sources, where copy_report can pick it',
+    ),
+  grant_editor_access: z
+    .boolean()
+    .optional()
+    .describe('With make_reusable: let report editors edit the data source (on by default)'),
 });
 
 export const updateFieldSchema = z.object({
@@ -1017,12 +1033,19 @@ export const copyReportSchema = z.object({
     .array(
       z.object({
         original: z.string().min(1).describe('Data source name in the original report'),
+        reusable: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Name of a reusable data source of the account to use instead (picked in the copy dialog; works for embedded and reusable originals). Not with a table or sql. update_data_source make_reusable turns an embedded one into a reusable one',
+          ),
         ...sourceShape,
       }),
     )
     .default([])
     .describe(
-      'Data sources to reconnect in the copy (a table or view, or sql); the others are kept',
+      'Data sources to replace in the copy: a reusable data source of the account (reusable), or a new connection (a table or view, or sql) for an embedded one; the others are kept',
     ),
 });
 
@@ -1060,6 +1083,18 @@ export const scheduleDeliverySchema = z.object({
     .object({
       interval: z.number().int().positive(),
       unit: z.enum(['day', 'week', 'month']).default('day'),
+      weekdays: z
+        .array(z.enum(WEEKDAYS))
+        .optional()
+        .describe(
+          'unit: week: the days it goes out (e.g. ["monday","thursday"]); the start date\'s weekday when omitted',
+        ),
+      monthly_on: z
+        .enum(['day', 'weekday'])
+        .optional()
+        .describe(
+          'unit: month: on the start date\'s day of the month (day, default) or its weekday ("the last Tuesday")',
+        ),
     })
     .optional()
     .describe('repeat: custom only: every N days, weeks or months'),
@@ -1067,6 +1102,53 @@ export const scheduleDeliverySchema = z.object({
     .array(z.string().min(1))
     .optional()
     .describe('Page names to send (multi-page reports); all pages when omitted'),
+  time_zone: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'IANA time zone of the schedule (e.g. Europe/Madrid). Looker Studio takes it from the browser when the schedule is created and keeps it: passing it recreates an existing schedule (options not passed go back to their defaults). It shows its own name for the zone (e.g. America/Bogota as "Eastern Time - Indianapolis")',
+    ),
+  filters: z
+    .array(
+      z.object({
+        page: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Page name; needed when several pages have the control'),
+        field: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Field of a filter control (drop-down, list, input box), as the control shows it',
+          ),
+        index: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('1-based, among controls of the page on the same field'),
+        values: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Values to keep (drop-down/list; [] for all) or the one value of an input box ([] clears it)',
+          ),
+        date_range: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Instead of field: the page\'s date range control, a preset ("Last 28 days") or YYYY-MM-DD..YYYY-MM-DD',
+          ),
+      }),
+    )
+    .optional()
+    .describe(
+      "Filters tab: the report's filter controls as the email applies them (by page). Controls not listed keep their default",
+    ),
 });
 
 export const listDeliveriesSchema = z.object({ report_id: reportId });
